@@ -70,6 +70,7 @@ pub fn tr(en: &'static str) -> &'static str {
         "New Folder" => "Nova pasta",
         "Recent Folders" => "Pastas recentes",
         "Recent Files" => "Arquivos recentes",
+        "Options" => "Opções",
         "Refresh" => "Atualizar",
         "Collapse All" => "Recolher tudo",
         "Rename" => "Renomear",

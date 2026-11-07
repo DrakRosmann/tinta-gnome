@@ -216,6 +216,8 @@ pub enum Message {
     TickSlow,
     Toast(String),
     OpenFolderPath(PathBuf),
+    /// The window became too narrow for the sidebar beside the text, or wide enough again.
+    Narrow(bool),
     OpenFiles(Vec<PathBuf>),
     SaveAsTo(TabId, PathBuf),
     Pasted(Option<String>),
@@ -321,6 +323,10 @@ pub struct App {
     pub modifiers: Modifiers,
     /// Set when the last key isn't the app's, so the focused widget gets it: a terminal, a field.
     pub key_passthrough: bool,
+    /// The window is narrow: the sidebar floats over the text, and goes away once a file opens.
+    pub narrow: bool,
+    /// The sidebar as it was before the window got narrow, to bring back when it widens.
+    pub(super) sidebar_wide: Option<SidebarView>,
     pub shortcuts_filter: String,
     pub title: String,
     pub session_dirty: Option<Instant>,
@@ -407,6 +413,8 @@ impl App {
             syntax_theme_names: tinta_core::syntax::theme_names(),
             modifiers: Modifiers::default(),
             key_passthrough: false,
+            narrow: false,
+            sidebar_wide: None,
             shortcuts_filter: String::new(),
             title: "Tinta".into(),
             session_dirty: None,
@@ -640,6 +648,20 @@ impl App {
                 self.toast(text)
             }
             Message::OpenFolderPath(p) => self.open_folder(p),
+            Message::Narrow(narrow) => {
+                if narrow != self.narrow {
+                    self.narrow = narrow;
+                    if narrow {
+                        self.sidebar_wide = self.sidebar.take();
+                    } else {
+                        let before = self.sidebar_wide.take();
+                        if self.sidebar.is_none() {
+                            self.sidebar = before;
+                        }
+                    }
+                }
+                Task::none()
+            }
             Message::OpenFiles(ps) => {
                 let mut tasks = Vec::new();
                 for p in ps {

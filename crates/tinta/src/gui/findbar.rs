@@ -9,7 +9,7 @@ use adw::prelude::*;
 use std::rc::Rc;
 
 pub struct FindBar {
-    pub root: gtk::Box,
+    pub root: adw::BreakpointBin,
     query: gtk::Entry,
     replace: gtk::Entry,
     replace_row: gtk::Box,
@@ -38,9 +38,8 @@ fn icon(shell: &Rc<Shell>, name: &str, tip: &str, m: FindMsg) -> gtk::Button {
 
 impl FindBar {
     pub fn build(shell: &Rc<Shell>, _win: &Window, _group: usize) -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        root.add_css_class("tinta-findbar");
-        root.set_visible(false);
+        let inner = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        inner.add_css_class("tinta-findbar");
         let line1 = gtk::Box::new(gtk::Orientation::Horizontal, 3);
         let mk = |label: &str, tip: &str, m: FindMsg| {
             let b = gtk::ToggleButton::with_label(label);
@@ -57,7 +56,7 @@ impl FindBar {
         let expand = mk("⇄", tr("Toggle replace"), FindMsg::ToggleReplace);
         line1.append(&expand);
         let query = rows::entry(shell, tr("Find"), |t| Message::Find(FindMsg::Query(t)));
-        query.set_width_chars(28);
+        query.set_width_chars(6);
         let f = send(shell, FindMsg::Next);
         query.connect_activate(move |_| f());
         line1.append(&query);
@@ -65,9 +64,17 @@ impl FindBar {
         let word = mk("ab", tr("Whole word"), FindMsg::ToggleWord);
         let regex = mk(".*", tr("Regular expression"), FindMsg::ToggleRegex);
         let sel = mk("≡", tr("Find in selection"), FindMsg::ToggleInSelection);
+        let options = gtk::Box::new(gtk::Orientation::Horizontal, 3);
         for b in [&case, &word, &regex, &sel] {
-            line1.append(b);
+            options.append(b);
         }
+        line1.append(&options);
+        // In a narrow split the options wait in a menu beside the field.
+        let options_menu = gtk::MenuButton::builder().icon_name("view-more-symbolic").tooltip_text(tr("Options")).visible(false).build();
+        options_menu.add_css_class("flat");
+        let options_pop = gtk::Popover::new();
+        options_menu.set_popover(Some(&options_pop));
+        line1.insert_child_after(&options_menu, Some(&query));
         let count = rows::dim("");
         count.set_margin_start(6);
         count.set_margin_end(6);
@@ -75,16 +82,17 @@ impl FindBar {
         line1.append(&icon(shell, "go-up-symbolic", tr("Previous match"), FindMsg::Prev));
         line1.append(&icon(shell, "go-down-symbolic", tr("Next match"), FindMsg::Next));
         line1.append(&icon(shell, "window-close-symbolic", tr("Close"), FindMsg::Close));
-        root.append(&line1);
+        inner.append(&line1);
         let error = gtk::Label::new(None);
         error.add_css_class("error");
         error.add_css_class("caption");
         error.set_xalign(0.0);
-        root.append(&error);
+        inner.append(&error);
         let replace_row = gtk::Box::new(gtk::Orientation::Horizontal, 3);
-        replace_row.append(&rows::spacer(34));
+        let indent = rows::spacer(34);
+        replace_row.append(&indent);
         let replace = rows::entry(shell, tr("Replace"), |t| Message::Find(FindMsg::Replacement(t)));
-        replace.set_width_chars(28);
+        replace.set_width_chars(6);
         let f = send(shell, FindMsg::ReplaceOne);
         replace.connect_activate(move |_| f());
         replace_row.append(&replace);
@@ -95,7 +103,27 @@ impl FindBar {
             b.connect_clicked(move |_| f());
             replace_row.append(&b);
         }
-        root.append(&replace_row);
+        inner.append(&replace_row);
+        let root = adw::BreakpointBin::builder().child(&inner).width_request(200).height_request(1).visible(false).build();
+        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(adw::BreakpointConditionLengthType::MaxWidth, 560.0, adw::LengthUnit::Px));
+        narrow.add_setter(&options_menu, "visible", Some(&true.to_value()));
+        narrow.add_setter(&indent, "visible", Some(&false.to_value()));
+        {
+            let (line1, options, pop) = (line1.clone(), options.clone(), options_pop.clone());
+            narrow.connect_apply(move |_| {
+                line1.remove(&options);
+                pop.set_child(Some(&options));
+            });
+        }
+        {
+            let (line1, options, pop, menu) = (line1.clone(), options.clone(), options_pop.clone(), options_menu.clone());
+            narrow.connect_unapply(move |_| {
+                pop.popdown();
+                pop.set_child(None::<&gtk::Widget>);
+                line1.insert_child_after(&options, Some(&menu));
+            });
+        }
+        root.add_breakpoint(narrow);
         FindBar { root, query, replace, replace_row, toggles: [expand, case, word, regex, sel], count, error }
     }
 

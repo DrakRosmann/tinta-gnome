@@ -15,6 +15,9 @@ e a interface foi reescrita com os componentes do GNOME.
 - Janela, cabeçalho e menu principal do libadwaita; abas em `AdwTabView`, que dá para reordenar
   ou levar de uma divisão para outra arrastando; divisões lado a lado com largura ajustável, que a
   sessão guarda
+- Cabe numa janela estreita, até 360 px: a barra lateral passa a flutuar sobre o texto
+  (`AdwOverlaySplitView`) e sai da frente quando um arquivo abre, as opções da busca vão para um
+  menu e a barra de status fica com o essencial
 - Preferências em `AdwPreferencesDialog`, com busca; avisos em `AdwToast`; diálogos em
   `AdwAlertDialog`; "Sobre" em `AdwAboutDialog`
 - Terminal VTE, o mesmo do Console e do GNOME Terminal

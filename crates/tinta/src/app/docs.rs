@@ -480,7 +480,8 @@ impl App {
             folder: self.folder.clone(),
             groups,
             active_group: self.active_group,
-            sidebar_visible: self.sidebar.is_some(),
+            // Hidden only because the window is narrow, it still counts as open.
+            sidebar_visible: if self.narrow { self.sidebar_wide.is_some() } else { self.sidebar.is_some() },
             sidebar_width: self.sidebar_w,
             panel_height: self.panel_h,
             recent_files: self.recent_files.clone(),

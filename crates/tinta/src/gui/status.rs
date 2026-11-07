@@ -148,13 +148,16 @@ impl StatusBar {
                 pos.push_str(&format!("  ({} {})", p.end() - p.start(), tr("selected")));
             }
             end.push(item(pos, Act::Cmd(Command::GoToLine)));
-            let indent = if d.indent.spaces { format!("{}: {}", tr("Spaces"), d.indent.width) } else { format!("{}: {}", tr("Tab Size"), d.indent.width) };
-            end.push(item(indent, Act::Cmd(Command::ChangeIndentSize)));
-            end.push(item(d.encoding.name().to_string(), Act::Cmd(Command::ChangeEncoding)));
-            let eol = if d.eol == tinta_core::buffer::LineEnding::Lf { Command::SetCrlf } else { Command::SetLf };
-            end.push(item(d.eol.label().to_string(), Act::Cmd(eol)));
+            // A narrow window keeps where the cursor is and the language; the rest is in the palette.
+            if !app.narrow {
+                let indent = if d.indent.spaces { format!("{}: {}", tr("Spaces"), d.indent.width) } else { format!("{}: {}", tr("Tab Size"), d.indent.width) };
+                end.push(item(indent, Act::Cmd(Command::ChangeIndentSize)));
+                end.push(item(d.encoding.name().to_string(), Act::Cmd(Command::ChangeEncoding)));
+                let eol = if d.eol == tinta_core::buffer::LineEnding::Lf { Command::SetCrlf } else { Command::SetLf };
+                end.push(item(d.eol.label().to_string(), Act::Cmd(eol)));
+            }
             end.push(item(d.language.name.clone(), Act::Cmd(Command::ChangeLanguage)));
-            if let Some(k) = &e.lsp_key {
+            if let Some(k) = e.lsp_key.as_ref().filter(|_| !app.narrow) {
                 end.push(dim(k.split('@').next().unwrap_or("").to_string()));
             }
             if d.readonly {

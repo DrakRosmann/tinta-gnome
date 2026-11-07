@@ -45,6 +45,8 @@ pub struct Window {
     toolbar: adw::ToolbarView,
     title: adw::WindowTitle,
     main: gtk::Paned,
+    /// Where the sidebar goes in a narrow window: over the text, not beside it.
+    split: adw::OverlaySplitView,
     right: gtk::Paned,
     groups_box: gtk::Box,
     welcome: adw::BreakpointBin,
@@ -73,7 +75,7 @@ struct Last {
     title: String,
     toast_gen: u64,
     zen: Option<bool>,
-    sidebar: Option<Option<crate::app::SidebarView>>,
+    sidebar: Option<(Option<crate::app::SidebarView>, bool)>,
     panel_open: Option<bool>,
     focus: Option<Focus>,
     active_tab: Option<TabId>,
@@ -161,10 +163,40 @@ impl Window {
 
         let status = super::status::StatusBar::build(shell);
         let vim_line = super::findbar::VimLine::build(shell);
+        let split = adw::OverlaySplitView::builder().collapsed(true).show_sidebar(false).content(&main).vexpand(true).build();
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        content.append(&main);
+        content.append(&split);
         content.append(&vim_line.root);
-        main.set_vexpand(true);
+
+        // Too narrow for the sidebar beside the text: it moves over it, and back when there's room.
+        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(adw::BreakpointConditionLengthType::MaxWidth, 720.0, adw::LengthUnit::Sp));
+        {
+            let (main, split, root, s) = (main.clone(), split.clone(), sidebar.root.clone(), Rc::downgrade(shell));
+            narrow.connect_apply(move |_| {
+                main.set_start_child(None::<&gtk::Widget>);
+                split.set_sidebar(Some(&root));
+                tell(&s, Message::Narrow(true));
+            });
+        }
+        {
+            let (main, split, root, s) = (main.clone(), split.clone(), sidebar.root.clone(), Rc::downgrade(shell));
+            narrow.connect_unapply(move |_| {
+                split.set_show_sidebar(false);
+                split.set_sidebar(None::<&gtk::Widget>);
+                main.set_start_child(Some(&root));
+                tell(&s, Message::Narrow(false));
+            });
+        }
+        window.add_breakpoint(narrow);
+        // Closed by a click beside it or a swipe: the app hears of it.
+        let s = Rc::downgrade(shell);
+        split.connect_show_sidebar_notify(move |split| {
+            let Some(sh) = s.upgrade() else { return };
+            let open = sh.app.try_borrow().is_ok_and(|a| a.narrow && a.sidebar.is_some());
+            if open && !split.shows_sidebar() {
+                tell(&s, Message::Cmd(Command::ToggleSidebar));
+            }
+        });
 
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
@@ -184,6 +216,7 @@ impl Window {
             toolbar,
             title,
             main,
+            split,
             right,
             groups_box,
             welcome,
@@ -318,6 +351,7 @@ impl Window {
             if let Some(s) = s.upgrade()
                 && let Ok(mut a) = s.app.try_borrow_mut()
                 && p.position() > 50
+                && p.start_child().is_some()
             {
                 a.sidebar_w = p.position() as f32;
             }
@@ -436,11 +470,16 @@ impl Window {
             last.zen = Some(app.zen);
         }
         let sidebar = if app.zen { None } else { app.sidebar };
-        if last.sidebar != Some(sidebar) {
-            self.sidebar.root.set_visible(sidebar.is_some());
-            last.sidebar = Some(sidebar);
+        if last.sidebar != Some((sidebar, app.narrow)) {
+            if app.narrow {
+                self.sidebar.root.set_visible(true);
+                self.split.set_show_sidebar(sidebar.is_some());
+            } else {
+                self.sidebar.root.set_visible(sidebar.is_some());
+            }
+            last.sidebar = Some((sidebar, app.narrow));
         }
-        if sidebar.is_some() && (app.sidebar_w as i32 - last.sidebar_w).abs() > 2 && (app.sidebar_w as i32 - self.main.position()).abs() > 2 {
+        if sidebar.is_some() && !app.narrow && (app.sidebar_w as i32 - last.sidebar_w).abs() > 2 && (app.sidebar_w as i32 - self.main.position()).abs() > 2 {
             self.main.set_position(app.sidebar_w as i32);
             last.sidebar_w = app.sidebar_w as i32;
         }
@@ -634,6 +673,16 @@ fn home_relative(p: &Path) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => p.display().to_string(),
     }
+}
+
+/// A message sent once the current event is over, from signals that may fire mid-update.
+fn tell(shell: &std::rc::Weak<Shell>, m: Message) {
+    let s = shell.clone();
+    glib::idle_add_local_once(move || {
+        if let Some(s) = s.upgrade() {
+            s.dispatch(m);
+        }
+    });
 }
 
 fn icon_button(icon: &str, cmd: Command, shell: &Rc<Shell>) -> gtk::Button {

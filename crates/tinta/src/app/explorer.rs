@@ -125,7 +125,7 @@ impl App {
                     self.mark_session_dirty();
                     return Task::none();
                 }
-                self.open_path(&row.path)
+                self.open_from_tree(&row.path)
             }
             ExplorerMsg::Scrolled(y, h) => {
                 self.explorer.scroll_y = y;
@@ -212,6 +212,23 @@ impl App {
         }
     }
 
+    /// A file picked in the tree. In a narrow window the tree covers the text, so it steps aside.
+    fn open_from_tree(&mut self, path: &Path) -> Task {
+        if self.narrow {
+            self.sidebar = None;
+        }
+        self.open_path(path)
+    }
+
+    /// The keyboard goes to the tree, on the selected row, or the first one when the selected
+    /// path isn't shown.
+    pub fn focus_explorer(&mut self) {
+        self.focus = Focus::Explorer;
+        if let Some(i) = self.explorer_cursor() {
+            self.explorer_select(i);
+        }
+    }
+
     /// The row the keyboard is on: the selected path, or the first row.
     fn explorer_cursor(&self) -> Option<usize> {
         let rows = &self.explorer.rows;
@@ -283,7 +300,7 @@ impl App {
                 self.explorer_set_expanded(&row.path, !row.expanded);
                 Some(Task::none())
             }
-            "enter" => Some(self.open_path(&row.path)),
+            "enter" => Some(self.open_from_tree(&row.path)),
             // Opens a file and stays in the tree, to look through several.
             "space" if !row.is_dir => {
                 let t = self.open_path(&row.path);

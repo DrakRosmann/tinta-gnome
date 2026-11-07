@@ -243,7 +243,7 @@ impl App {
             C::ShowExplorer => {
                 let t = self.show_sidebar(SidebarView::Explorer);
                 if self.folder.is_some() {
-                    self.focus = Focus::Explorer;
+                    self.focus_explorer();
                 }
                 return t;
             }

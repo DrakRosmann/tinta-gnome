@@ -509,6 +509,27 @@ fn explorer_keyboard_moves_opens_and_folds() {
 }
 
 #[test]
+fn narrow_window_floats_the_sidebar_and_puts_it_back() {
+    let dir = temp_dir("narrow");
+    std::fs::write(dir.join("one.txt"), "1\n").unwrap();
+    let mut ui = Ui::new(vec![dir]);
+    assert_eq!(ui.app.sidebar, Some(SidebarView::Explorer));
+    // Narrow: the sidebar steps aside, comes back on demand with the keyboard on the first row,
+    // and goes again once a file opens from it.
+    ui.msg(Message::Narrow(true));
+    assert_eq!(ui.app.sidebar, None);
+    ui.cmd(Command::ShowExplorer);
+    assert_eq!(ui.app.sidebar, Some(SidebarView::Explorer));
+    assert_eq!(ui.app.explorer.selected.as_ref().and_then(|p| p.file_name()).and_then(|n| n.to_str()), Some("one.txt"));
+    ui.key("enter", Modifiers::empty(), None);
+    assert_eq!(ui.app.active().unwrap().1.doc.file_name(), "one.txt");
+    assert_eq!(ui.app.sidebar, None);
+    // Wide again: back as it was before the window shrank.
+    ui.msg(Message::Narrow(false));
+    assert_eq!(ui.app.sidebar, Some(SidebarView::Explorer));
+}
+
+#[test]
 fn palette_filters_and_runs_a_clicked_command() {
     let (mut ui, _) = Ui::with_file();
     ui.cmd(Command::CommandPalette);

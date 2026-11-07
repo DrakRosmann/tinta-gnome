@@ -189,6 +189,9 @@ impl Sidebar {
         let stack = gtk::Stack::new();
         stack.set_vexpand(true);
         stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        // Only the page shown counts for the width: the widest of the others would keep the
+        // sidebar, and a narrow window, wider than the page in view needs.
+        stack.set_hhomogeneous(false);
         root.append(&stack);
 
         // Files.
