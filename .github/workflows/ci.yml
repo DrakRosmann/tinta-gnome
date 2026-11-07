@@ -15,7 +15,7 @@ jobs:
       - name: Ferramentas, bibliotecas e um servidor de linguagem e depuradores para os testes
         run: |
           dnf install -y --setopt=install_weak_deps=False git gcc pkgconf-pkg-config cargo rust \
-            gtk4-devel libadwaita-devel vte291-gtk4-devel clang-tools-extra gdb python3-pip
+            gtk4-devel libadwaita-devel vte291-gtk4-devel clang-tools-extra gdb python3-pip procps-ng
           dnf install -y --skip-unavailable google-noto-sans-mono-fonts
           # O Fedora não empacota o debugpy.
           pip install --break-system-packages debugpy
