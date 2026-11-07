@@ -4,6 +4,7 @@
 pub mod buffer;
 pub mod commands;
 pub mod cursor;
+pub mod desktop;
 pub mod dap;
 pub mod diff;
 pub mod display;

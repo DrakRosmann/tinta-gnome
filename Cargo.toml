@@ -7,7 +7,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
-repository = "https://github.com/DrakRosmann/cosmic-ext-tinta"
+repository = "https://github.com/DrakRosmann/tinta-gnome"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

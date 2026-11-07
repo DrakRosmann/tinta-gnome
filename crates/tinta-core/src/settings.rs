@@ -70,6 +70,8 @@ pub struct Settings {
     pub font_size: f32,
     pub line_height: f32,
     pub ui_theme: AppTheme,
+    /// COSMIC's look or GNOME's; `auto` goes by the desktop.
+    pub interface_style: crate::desktop::InterfaceStyle,
     pub syntax_theme: String,
     pub tab_size: usize,
     pub insert_spaces: bool,
@@ -118,6 +120,7 @@ impl Default for Settings {
             font_size: 14.0,
             line_height: 1.45,
             ui_theme: AppTheme::System,
+            interface_style: crate::desktop::InterfaceStyle::Auto,
             syntax_theme: "COSMIC".into(),
             tab_size: 4,
             insert_spaces: true,
@@ -162,11 +165,11 @@ impl Default for Settings {
 }
 
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".config")).join("tinta")
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".config")).join("tinta-gnome")
 }
 
 pub fn state_dir() -> PathBuf {
-    dirs::state_dir().unwrap_or_else(|| PathBuf::from(".local/state")).join("tinta")
+    dirs::state_dir().unwrap_or_else(|| PathBuf::from(".local/state")).join("tinta-gnome")
 }
 
 pub fn settings_path() -> PathBuf {

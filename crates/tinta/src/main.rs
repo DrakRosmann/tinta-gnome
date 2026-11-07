@@ -49,17 +49,24 @@ fn main() -> cosmic::iced::Result {
     }
 
     let (settings, _) = tinta_core::settings::Settings::load();
-    let theme = match settings.ui_theme {
+    let look = app::Look::detect(&settings);
+    look.apply_toolkit();
+    let theme = look.theme(settings.ui_theme).unwrap_or_else(|| match settings.ui_theme {
         tinta_core::settings::AppTheme::System => cosmic::theme::system_preference(),
         tinta_core::settings::AppTheme::Dark => cosmic::Theme::dark(),
         tinta_core::settings::AppTheme::Light => cosmic::Theme::light(),
-    };
-    let window = Settings::default()
+    });
+    let mut window = Settings::default()
         .size(Size::new(1280.0, 820.0))
         .size_limits(Limits::NONE.min_width(480.0).min_height(320.0))
         .theme(theme)
         .exit_on_close(false);
-    let result = cosmic::app::run::<App>(window, Flags { targets, new_session });
+    if look.is_gnome() {
+        // Once, for the life of the program: the toolkit keeps a reference to the name.
+        let family: &'static str = Box::leak(look.gnome.font.family.clone().into_boxed_str());
+        window = window.default_font(cosmic::iced::Font::with_name(family)).default_icon_theme(look.gnome.icon_theme.clone());
+    }
+    let result = cosmic::app::run::<App>(window, Flags { targets, new_session, look });
     if let Some(p) = socket {
         let _ = std::fs::remove_file(p);
     }
@@ -68,7 +75,7 @@ fn main() -> cosmic::iced::Result {
 
 const USAGE: &str = "tinta: code editor for the COSMIC desktop
 
-Usage: cosmic-ext-tinta [--new-session] [FILE[:LINE[:COL]] | FOLDER]...
+Usage: tinta-gnome [--new-session] [FILE[:LINE[:COL]] | FOLDER]...
 
   --new-session   a separate editor: no saved session, no backups, doesn't join the running one
   --version       print the version

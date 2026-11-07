@@ -1,5 +1,5 @@
 //! Driving the app from a file. Lets tests and screenshots go through the real update loop and
-//! renderer: `TINTA_SCRIPT=steps.txt cosmic-ext-tinta`.
+//! renderer: `TINTA_SCRIPT=steps.txt tinta-gnome`.
 //!
 //! Each line is a step; `#` starts a comment:
 //!   wait 200                 pause, in milliseconds
@@ -212,6 +212,8 @@ impl App {
                 "breakpoints": self.debug.breakpoints.iter().map(|(p, l)| json!([p, l.iter().map(|b| json!([b.line, format!("{:?}", b.state)])).collect::<Vec<_>>()])).collect::<Vec<_>>(),
                 "console": self.debug.console.iter().map(|l| l.text.clone()).collect::<Vec<_>>(),
             },
+            "title": self.title,
+            "gnome": self.look.is_gnome(),
             "sidebar": self.sidebar.map(|s| format!("{s:?}")),
             "panel": self.panel.map(|s| format!("{s:?}")),
             "palette": self.palette.as_ref().map(|p| json!({

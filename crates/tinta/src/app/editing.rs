@@ -463,7 +463,7 @@ impl App {
     }
 
     pub fn apply_font(&mut self) {
-        self.metrics = crate::state::Metrics::new(&self.settings.font_family, self.settings.font_size, self.settings.line_height);
+        self.metrics = crate::state::Metrics::new(&self.editor_font_family(), self.settings.font_size, self.settings.line_height);
     }
 
     // Find ---------------------------------------------------------------------------------

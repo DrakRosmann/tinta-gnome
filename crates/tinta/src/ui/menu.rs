@@ -92,12 +92,11 @@ fn binds(app: &App) -> HashMap<KeyBind, Act> {
 
 static MENU_BAR: std::sync::LazyLock<cosmic::widget::Id> = std::sync::LazyLock::new(|| cosmic::widget::Id::new("menu-bar"));
 
-pub fn menu_bar(app: &App) -> Element<'_, Message> {
+fn menu_trees(app: &App) -> Vec<(&'static str, Vec<Item<Act, &'static str>>)> {
     let pt = app.pt();
     let b = |c: Command| Item::Button(c.title(pt), None, Act(c));
     let check = |c: Command, on: bool| Item::CheckBox(c.title(pt), None, on, Act(c));
     let d = || Item::Divider;
-    let keys = binds(app);
     let s = &app.settings;
     use Command as C;
     let mut recent_or_open = vec![b(C::NewFile), b(C::OpenFile), b(C::OpenFolder), b(C::OpenRecent), d()];
@@ -340,19 +339,47 @@ pub fn menu_bar(app: &App) -> Element<'_, Message> {
         ),
         tree(tr("Help"), vec![b(C::ShowShortcuts), b(C::About)]),
     ];
+    trees
+}
+
+pub fn menu_bar(app: &App) -> Element<'_, Message> {
+    let keys = binds(app);
+    let trees = menu_trees(app);
     let bar = cosmic::widget::responsive_menu_bar()
         .item_height(menu::ItemHeight::Dynamic(36))
-        .item_width(menu::ItemWidth::Uniform(320))
+        .item_width(menu::ItemWidth::Uniform(360))
         .spacing(2.0)
         .into_element(&app.core, &keys, MENU_BAR.clone(), Message::Surface, trees);
     // Menu roots paint their label in the inherited icon colour, and with the content container
     // off nothing above sets one: without this the labels are invisible.
-    cosmic::widget::container(bar)
+    header_colors(bar.into())
+}
+
+/// Menu roots and the title paint in the inherited colours, and with the content container off
+/// nothing above the header bar sets them: without this they're invisible.
+pub fn header_colors(el: Element<'_, Message>) -> Element<'_, Message> {
+    cosmic::widget::container(el)
         .class(cosmic::theme::Container::custom(|t: &cosmic::Theme| {
             let on: cosmic::iced::Color = t.cosmic().background(false).on.into();
             cosmic::iced::widget::container::Style { icon_color: Some(on), text_color: Some(on), ..Default::default() }
         }))
         .into()
+}
+
+/// GNOME's primary menu: every menu behind one button at the end of the header bar.
+pub fn primary_menu(app: &App) -> Element<'_, Message> {
+    let keys = binds(app);
+    let folders = menu_trees(app).into_iter().map(|(label, items)| Item::Folder(label, items)).collect();
+    let bar = menu::bar(vec![menu::Tree::with_children(
+        Element::from(cosmic::widget::button::icon(cosmic::widget::icon::from_name("open-menu-symbolic")).padding([4, 12]).class(cosmic::theme::Button::MenuRoot)),
+        menu::items(&keys, folders).into_iter().map(|t| t.width(360)).collect(),
+    )])
+    .item_height(menu::ItemHeight::Dynamic(36))
+    .item_width(menu::ItemWidth::Uniform(360))
+    .spacing(2.0)
+    .on_surface_action(Message::Surface)
+    .window_id_maybe(app.core.main_window_id());
+    header_colors(bar.into())
 }
 
 /// Right click in the text.

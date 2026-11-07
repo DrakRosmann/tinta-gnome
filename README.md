@@ -1,8 +1,39 @@
-# Tinta
+# Tinta para GNOME e COSMIC
 
-Um editor de código para o desktop COSMIC, escrito em Rust com o libcosmic. Tem a cara dos
-aplicativos do COSMIC (segue o tema, a cor de destaque e os cantos do sistema) e faz o que se
-espera de um VS Code ou de um Sublime Text.
+Um fork do [Tinta](https://github.com/DrakRosmann/cosmic-ext-tinta), o editor de código feito com o
+libcosmic, que **toma a cara do ambiente onde roda**: no COSMIC continua igual ao original; no GNOME
+usa o visual do GNOME.
+
+![No GNOME: cores do Adwaita, título no meio do cabeçalho e o menu atrás de um botão](assets/screenshot-gnome.png)
+
+![O menu principal, à direita, como nos aplicativos do GNOME](assets/screenshot-gnome-menu.png)
+
+## O que muda no GNOME
+
+Continua sendo o mesmo aplicativo, feito com o libcosmic, e não um aplicativo GTK. O que ele faz é
+ler as preferências do GNOME e se vestir com elas:
+
+- **Cores:** as superfícies do libadwaita (fundo, barra lateral, menus), claro ou escuro conforme o
+  GNOME, e a **cor de destaque** escolhida nas configurações do sistema
+- **Formas:** os cantos do Adwaita, 6 nos botões e 12 nos menus
+- **Fontes:** a da interface e a de largura fixa do GNOME (Adwaita Sans e Adwaita Mono, por
+  padrão); uma fonte escolhida nas configurações do editor continua valendo
+- **Ícones:** o tema de ícones do GNOME
+- **Cabeçalho:** o título no meio, todos os menus atrás de um botão no fim, e os botões de
+  minimizar e maximizar só se o GNOME estiver configurado para mostrá-los
+- **Ao vivo:** trocar o modo escuro, a cor de destaque ou a fonte de largura fixa no GNOME muda o
+  editor aberto, sem reiniciar
+
+Ele decide pelo `XDG_CURRENT_DESKTOP`. Em outros ambientes (KDE, Sway) fica com o visual do COSMIC.
+Nas configurações, "Estilo da interface" deixa escolher: seguir o ambiente, COSMIC ou GNOME. Voltar do
+GNOME para o COSMIC com o editor aberto troca as cores na hora; fontes e ícones, ao reiniciar.
+
+**O que não muda:** os controles continuam sendo os do libcosmic. Botões, listas, menus e caixas
+de texto têm as cores e os cantos do GNOME, mas não o comportamento exato do GTK. Os botões da
+janela ficam sempre à direita, mesmo que o GNOME esteja configurado para colocá-los à esquerda.
+
+Este fork usa nome e pastas próprios (`tinta-gnome`, `~/.config/tinta-gnome`), então pode ser
+instalado ao lado do Tinta original.
 
 ![Tinta com a árvore de arquivos, o editor e o terminal](assets/screenshot.png)
 
@@ -14,7 +45,7 @@ espera de um VS Code ou de um Sublime Text.
 
 ![O tema claro, com o editor dividido](assets/screenshot-light.png)
 
-## O que ele faz
+## O que ele faz, igual ao original
 
 **Edição**
 
@@ -124,30 +155,30 @@ também o formato do VS Code. O comando "Editar launch.json" cria um modelo:
 - Terminal integrado (o emulador do Alacritty), com vários terminais, seleção e cores
 - Árvore de arquivos com menu de contexto, ícones do tema e cores do git
 - Sessão restaurada ao abrir, e texto não salvo guardado entre execuções (o _hot exit_ do VS Code)
-- Uma janela só: `tinta arquivo` manda o arquivo para a janela que já está aberta
+- Uma janela só: `tinta-gnome arquivo` manda o arquivo para a janela que já está aberta
 - Salvamento atômico, salvar automaticamente, formatar ao salvar, limpar espaços no fim das linhas
 - Codificações (UTF-8, UTF-16, Windows-1252, Shift JIS…) e fins de linha detectados e preservados
 - Recarrega arquivos que mudaram no disco e pergunta se você tem alterações não salvas
-- Abrir arquivos arrastando, ou na linha de comando: `tinta src/main.rs:10:4`
+- Abrir arquivos arrastando, ou na linha de comando: `tinta-gnome src/main.rs:10:4`
 - Interface em português e inglês, conforme o idioma do sistema
 
 ## Instalação
 
 ```sh
-git clone https://github.com/DrakRosmann/cosmic-ext-tinta
-cd cosmic-ext-tinta
+git clone https://github.com/DrakRosmann/tinta-gnome
+cd tinta-gnome
 ./install.sh          # instala em ~/.local
 ```
 
 O `deps.sh` instala o que faltar com `apt`, `dnf` ou `pacman`. Depois é abrir "Tinta" no lançador,
-ou rodar `tinta [arquivo ou pasta]`.
+ou rodar `tinta-gnome [arquivo ou pasta]`.
 
 Para ter inteligência de código, instale o servidor da sua linguagem: `rustup component add
 rust-analyzer`, `dnf install clang-tools-extra` e assim por diante. Ele é encontrado no `PATH`.
 
 ## Configuração
 
-Tudo pode ser mudado na janela de configurações (`Ctrl+,`) ou à mão, em `~/.config/tinta/`. O
+Tudo pode ser mudado na janela de configurações (`Ctrl+,`) ou à mão, em `~/.config/tinta-gnome/`. O
 arquivo é relido ao salvar, sem reiniciar, e aceita comentários e vírgulas sobrando:
 
 ```jsonc
@@ -283,6 +314,13 @@ tests/e2e/run.sh /tmp/passos.txt
 ```
 
 Os passos estão descritos em [`script.rs`](crates/tinta/src/app/script.rs).
+
+`tests/e2e/gnome.sh` roda o editor dentro de um **GNOME Shell de verdade**, sem tela, num D-Bus
+próprio e com as preferências do GNOME num arquivo próprio, nunca nas suas:
+
+```sh
+tests/e2e/gnome.sh /tmp/passos.txt color-scheme=prefer-dark accent-color=teal
+```
 
 `tests/e2e/pointer.sh` faz o mesmo com um **ponteiro de verdade**: o compositor roda dentro de um
 Xwayland próprio, e o `tinta-xptr` move, clica e captura os pixels da tela, sem mexer no cursor do

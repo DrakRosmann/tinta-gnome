@@ -36,6 +36,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
             s.ui_theme,
             S::UiTheme,
         ))
+        .add(choice(
+            "Interface style",
+            &[("Follow the desktop", tinta_core::desktop::InterfaceStyle::Auto), ("COSMIC", tinta_core::desktop::InterfaceStyle::Cosmic), ("GNOME", tinta_core::desktop::InterfaceStyle::Gnome)],
+            s.interface_style,
+            S::InterfaceStyle,
+        ))
         .add(
             settings::item::builder(tr("Syntax colors")).control(widget::dropdown(
                 app.syntax_theme_names.as_slice(),

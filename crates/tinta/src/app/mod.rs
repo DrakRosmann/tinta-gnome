@@ -1,6 +1,7 @@
 //! The application: all state lives here, every change goes through `update`.
 
 mod commands;
+mod look;
 mod debug;
 mod diff;
 mod docs;
@@ -23,6 +24,7 @@ pub use editing::{FIND_INPUT, MAX_SHOWN_MATCHES, REPLACE_INPUT};
 pub use explorer::ExplorerMsg;
 pub use palette::{PAction, PItem, PaletteMode, PaletteMsg, PaletteState, PALETTE_INPUT};
 pub use debug::{DEBUG_INPUT, DebugMsg, DebugPanel, WATCH_INPUT};
+pub use look::Look;
 pub use tasks::{TaskMsg, TaskPanel};
 pub use vim::{VIM_LINE, VimMsg};
 pub use search::{SearchMsg, SearchPanel, SearchRow, SEARCH_INPUT};
@@ -45,11 +47,12 @@ use tinta_core::keymap::{Command, Keymap};
 use tinta_core::settings::{AppTheme, AutoSave, Settings};
 use tinta_core::{find, lsp as core_lsp};
 
-pub const APP_ID: &str = "io.github.DrakRosmann.CosmicExtTinta";
+pub const APP_ID: &str = "io.github.DrakRosmann.TintaGnome";
 
 pub struct Flags {
     pub targets: Vec<(PathBuf, Option<(usize, usize)>)>,
     pub new_session: bool,
+    pub look: Look,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +136,7 @@ pub enum FindMsg {
 #[derive(Debug, Clone)]
 pub enum SettingMsg {
     UiTheme(AppTheme),
+    InterfaceStyle(tinta_core::desktop::InterfaceStyle),
     SyntaxTheme(String),
     FontFamily(String),
     FontSize(f32),
@@ -209,6 +213,8 @@ pub enum Message {
     Task(TaskMsg),
     Vim(VimMsg),
     Debug(DebugMsg),
+    /// A GNOME interface setting changed: key, and value as gsettings prints it.
+    GnomeSetting(String, String),
     TermLink(String, usize),
     OutlineJump(usize),
     CompletionPick(usize),
@@ -252,6 +258,7 @@ pub struct App {
     pub git: GitPanel,
     pub tasks: TaskPanel,
     pub debug: DebugPanel,
+    pub look: Look,
     pub vim: tinta_core::vim::Vim,
     pub vim_line: Option<(char, String)>,
     pub vim_highlight: Option<String>,
@@ -334,7 +341,7 @@ impl Application for App {
         }
         let dark = cosmic::theme::is_dark();
         let syntax_theme = tinta_core::syntax::theme_by_name(&settings.syntax_theme, dark);
-        let metrics = Metrics::new(&settings.font_family, settings.font_size, settings.line_height);
+        let metrics = Metrics::new(&if flags.look.is_gnome() && settings.font_family == tinta_core::settings::Settings::default().font_family { flags.look.gnome.mono.family.clone() } else { settings.font_family.clone() }, settings.font_size, settings.line_height);
         let mut app = App {
             core,
             base_font_size: settings.font_size,
@@ -352,6 +359,7 @@ impl Application for App {
             git: GitPanel::default(),
             tasks: TaskPanel::default(),
             debug: DebugPanel::default(),
+            look: flags.look.clone(),
             vim: tinta_core::vim::Vim::new(),
             vim_line: None,
             vim_highlight: None,
@@ -417,23 +425,33 @@ impl Application for App {
         let mut tasks = vec![app.restore(flags.targets)];
         tasks.push(app.update_title());
         script::start();
-        if app.settings.ui_theme != AppTheme::System {
+        if app.settings.ui_theme != AppTheme::System || app.look.is_gnome() {
             tasks.push(app.apply_ui_theme());
         }
+        app.watch_desktop();
         (app, Task::batch(tasks))
     }
 
     fn header_start(&self) -> Vec<Element<'_, Message>> {
-        if self.zen { Vec::new() } else { vec![ui::menu::menu_bar(self)] }
+        // GNOME apps keep their menu behind a button at the end of the header bar.
+        if self.zen || self.look.is_gnome() { Vec::new() } else { vec![ui::menu::menu_bar(self)] }
     }
 
     fn header_center(&self) -> Vec<Element<'_, Message>> {
-        Vec::new()
+        // ...and their title in the middle of it.
+        if self.zen || !self.look.is_gnome() {
+            return Vec::new();
+        }
+        let title = cosmic::widget::text(self.title.clone()).font(cosmic::font::semibold()).size(14).wrapping(cosmic::iced::widget::text::Wrapping::None);
+        vec![ui::menu::header_colors(title.into())]
     }
 
     fn header_end(&self) -> Vec<Element<'_, Message>> {
         if self.zen {
             return Vec::new();
+        }
+        if self.look.is_gnome() {
+            return vec![ui::workspace::header_buttons(self), ui::menu::primary_menu(self)];
         }
         vec![ui::workspace::header_buttons(self)]
     }
@@ -682,6 +700,7 @@ impl App {
             Message::Task(m) => self.on_task(m),
             Message::Vim(m) => self.on_vim(m),
             Message::Debug(m) => self.on_debug(m),
+            Message::GnomeSetting(k, v) => self.on_gnome_setting(k, v),
             Message::TermLink(text, col) => self.on_term_link(text, col),
             Message::OutlineJump(line) => {
                 self.push_nav();
@@ -849,13 +868,20 @@ impl App {
     }
 
     pub fn apply_ui_theme(&mut self) -> Task<Message> {
-        let theme = match self.settings.ui_theme {
-            AppTheme::System => cosmic::theme::system_preference(),
-            AppTheme::Dark => Theme::dark(),
-            AppTheme::Light => Theme::light(),
+        let theme = match self.look.theme(self.settings.ui_theme) {
+            Some(t) => t,
+            None => self.cosmic_theme(),
         };
         let t = cosmic::command::set_theme::<Message>(theme);
         Task::batch([t, cosmic::task::message(cosmic::Action::App(Message::ThemeChanged))])
+    }
+
+    fn cosmic_theme(&self) -> Theme {
+        match self.settings.ui_theme {
+            AppTheme::System => cosmic::theme::system_preference(),
+            AppTheme::Dark => Theme::dark(),
+            AppTheme::Light => Theme::light(),
+        }
     }
 }
 

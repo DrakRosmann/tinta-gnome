@@ -46,6 +46,10 @@ const SOURCE: &str = "fn main() {\n    let alpha = 1;\n    let beta = alpha + 2;
 
 impl Ui {
     fn new(targets: Vec<PathBuf>) -> Self {
+        Self::with_look(targets, crate::app::Look::cosmic())
+    }
+
+    fn with_look(targets: Vec<PathBuf>, look: crate::app::Look) -> Self {
         let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         INIT.call_once(|| {
             let base = temp_dir("env");
@@ -59,7 +63,7 @@ impl Ui {
         // Earlier tests may have saved settings; each starts from the defaults.
         let _ = std::fs::remove_file(tinta_core::settings::settings_path());
         let _ = bus::drain();
-        let flags = Flags { targets: targets.into_iter().map(|p| (p, None)).collect(), new_session: true };
+        let flags = Flags { targets: targets.into_iter().map(|p| (p, None)).collect(), new_session: true, look };
         let (app, _) = App::init(Core::default(), flags);
         let renderer = Renderer::Secondary(iced_tiny_skia::Renderer::new(Font::DEFAULT, Pixels(14.0)));
         let mut ui = Ui {
@@ -669,7 +673,7 @@ fn opening_a_file_does_not_lose_the_session_it_would_have_restored() {
     let other = temp_dir("other").join("b.txt");
     std::fs::write(&other, "b").unwrap();
     let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let flags = Flags { targets: vec![(other, None)], new_session: false };
+    let flags = Flags { targets: vec![(other, None)], new_session: false, look: crate::app::Look::cosmic() };
     let (app, _) = App::init(Core::default(), flags);
     drop(guard);
     assert_eq!(app.active().unwrap().1.doc.file_name(), "b.txt", "the requested file is in front");
@@ -710,7 +714,7 @@ fn hot_exit_brings_unsaved_text_back() {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     drop(_g);
     let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let flags = Flags { targets: Vec::new(), new_session: false };
+    let flags = Flags { targets: Vec::new(), new_session: false, look: crate::app::Look::cosmic() };
     let (app, _) = App::init(Core::default(), flags);
     drop(guard);
     let (_, e) = app.active().expect("the tab came back");
@@ -1169,6 +1173,103 @@ fn saying_what_is_missing_when_a_language_has_no_debugger() {
     ui.key("f9", Modifiers::empty(), None);
     assert!(ui.app.debug.breakpoints.is_empty());
     assert!(ui.app.toast.is_some());
+}
+
+fn gnome_ui(prefs: &[(&str, &str)]) -> Ui {
+    let mut gnome = tinta_core::desktop::GnomePrefs::default();
+    for (k, v) in prefs {
+        gnome.apply(k, v);
+    }
+    let look = crate::app::Look { style: tinta_core::desktop::Style::Gnome, gnome };
+    let dir = temp_dir("gnome");
+    let p = dir.join("a.rs");
+    std::fs::write(&p, SOURCE).unwrap();
+    Ui::with_look(vec![p], look)
+}
+
+fn close(c: cosmic::cosmic_theme::palette::Srgba, rgb: [u8; 3]) -> bool {
+    let want = [rgb[0] as f32 / 255.0, rgb[1] as f32 / 255.0, rgb[2] as f32 / 255.0];
+    (c.red - want[0]).abs() < 0.02 && (c.green - want[1]).abs() < 0.02 && (c.blue - want[2]).abs() < 0.02
+}
+
+#[test]
+fn on_gnome_it_takes_gnomes_look() {
+    use cosmic::Application;
+    use tinta_core::settings::AppTheme;
+    let mut ui = gnome_ui(&[("accent-color", "'teal'"), ("color-scheme", "'prefer-dark'"), ("monospace-font-name", "'Adwaita Mono 11'")]);
+    // The title in the middle, and all the menus behind one button at the end.
+    assert!(ui.app.header_start().is_empty());
+    assert_eq!(ui.app.header_center().len(), 1);
+    assert_eq!(ui.app.header_end().len(), 2);
+    // libadwaita's colors and corners.
+    let t = ui.app.look.theme(AppTheme::System).unwrap();
+    let c = t.cosmic();
+    assert!(c.is_dark);
+    assert!(close(c.accent.base, [0x21, 0x90, 0xa4]), "teal: {:?}", c.accent.base);
+    assert!(close(c.bg_color(), [0x22, 0x22, 0x26]), "{:?}", c.bg_color());
+    assert_eq!(c.corner_radii.radius_s, [6.0; 4]);
+    // The theme setting still wins over GNOME's.
+    assert!(!ui.app.look.theme(AppTheme::Light).unwrap().cosmic().is_dark);
+    // GNOME's monospace font, unless the user picked one.
+    assert_eq!(ui.app.editor_font_family(), "Adwaita Mono");
+    ui.app.settings.font_family = "Fira Code".into();
+    assert_eq!(ui.app.editor_font_family(), "Fira Code");
+    ui.app.settings.font_family = tinta_core::settings::Settings::default().font_family;
+    // Changes in GNOME's settings while it runs.
+    let _ = ui.app.update(Message::GnomeSetting("accent-color".into(), "'pink'".into()));
+    assert_eq!(ui.app.look.gnome.accent, "pink");
+    assert!(close(ui.app.look.theme(AppTheme::System).unwrap().cosmic().accent.base, [0xd5, 0x61, 0x99]));
+    let _ = ui.app.update(Message::GnomeSetting("monospace-font-name".into(), "'Source Code Pro 12'".into()));
+    assert_eq!(ui.app.editor_font_family(), "Source Code Pro");
+    let _ = ui.app.update(Message::GnomeSetting("color-scheme".into(), "'default'".into()));
+    assert!(!ui.app.look.theme(AppTheme::System).unwrap().cosmic().is_dark);
+    // It all still draws.
+    ui.frame();
+}
+
+/// The header bar as libcosmic builds it, with the GNOME look's three regions, drawn for real.
+#[test]
+fn the_gnome_header_draws_its_title() {
+    use cosmic::Application;
+    let ui = gnome_ui(&[]);
+    let mut header = cosmic::widget::header_bar().title("").on_close(Message::Noop);
+    for e in ui.app.header_start() {
+        header = header.start(e);
+    }
+    for e in ui.app.header_center() {
+        header = header.center(e);
+    }
+    for e in ui.app.header_end() {
+        header = header.end(e);
+    }
+    let el: Element<'_, Message> = header.into();
+    let mut r = Renderer::Secondary(iced_tiny_skia::Renderer::new(Font::DEFAULT, Pixels(14.0)));
+    let mut bar = UserInterface::build(el, Size::new(1000.0, 48.0), user_interface::Cache::new(), &mut r);
+    let mut msgs = Vec::new();
+    let mut clip = clipboard::Null;
+    let cursor = mouse::Cursor::Unavailable;
+    let _ = bar.update(&[Event::Window(window::Event::RedrawRequested(Instant::now()))], cursor, &mut r, &mut clip, &mut msgs);
+    let style = cosmic::iced::advanced::renderer::Style { icon_color: cosmic::iced::Color::WHITE, text_color: cosmic::iced::Color::WHITE, scale_factor: 1.0 };
+    bar.draw(&mut r, &ui.theme, &style, cursor);
+    drop(bar);
+    let Renderer::Secondary(sk) = &mut r else { panic!() };
+    let texts: Vec<String> = sk.layers().iter().flat_map(|l| l.text.iter().map(|t| format!("{t:?}").chars().take(300).collect::<String>())).collect();
+    // One text, the title, in the middle of the bar.
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    let x: f32 = texts[0].split("position: Point { x: ").nth(1).and_then(|s| s.split(',').next()).and_then(|s| s.parse().ok()).unwrap();
+    assert!((350.0..560.0).contains(&x), "centered: {x}");
+}
+
+#[test]
+fn on_cosmic_nothing_changes() {
+    use cosmic::Application;
+    let (ui, _) = Ui::with_file();
+    assert!(!ui.app.look.is_gnome());
+    assert_eq!(ui.app.header_start().len(), 1, "the menu bar");
+    assert!(ui.app.header_center().is_empty());
+    assert_eq!(ui.app.header_end().len(), 1);
+    assert!(ui.app.look.theme(tinta_core::settings::AppTheme::System).is_none());
+    assert_eq!(ui.app.editor_font_family(), tinta_core::settings::Settings::default().font_family);
 }
 
 /// Menus are surfaces of their own, and closing one asks the same question as closing the window.

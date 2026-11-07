@@ -40,7 +40,7 @@ jobs:
         run: cargo test -p tinta-core
 
       - name: Testes da interface
-        run: cargo test -p cosmic-ext-tinta
+        run: cargo test -p tinta-gnome
 
       - name: Compila tudo
         run: cargo build --workspace

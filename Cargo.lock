@@ -992,33 +992,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cosmic-ext-tinta"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "dirs",
- "encoding_rs",
- "env_logger",
- "futures",
- "iced_runtime",
- "iced_tiny_skia",
- "image",
- "libcosmic",
- "log",
- "notify",
- "open",
- "pulldown-cmark",
- "regex",
- "ropey",
- "serde",
- "serde_json",
- "syntect",
- "tinta-core",
- "tokio",
- "trash",
-]
-
-[[package]]
 name = "cosmic-freedesktop-icons"
 version = "0.4.0"
 source = "git+https://github.com/pop-os/freedesktop-icons#ab4c57b8e416c6af9297cb04d101889896fd9a92"
@@ -5089,6 +5062,33 @@ dependencies = [
  "two-face",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "tinta-gnome"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "dirs",
+ "encoding_rs",
+ "env_logger",
+ "futures",
+ "iced_runtime",
+ "iced_tiny_skia",
+ "image",
+ "libcosmic",
+ "log",
+ "notify",
+ "open",
+ "pulldown-cmark",
+ "regex",
+ "ropey",
+ "serde",
+ "serde_json",
+ "syntect",
+ "tinta-core",
+ "tokio",
+ "trash",
 ]
 
 [[package]]

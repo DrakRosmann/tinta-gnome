@@ -41,7 +41,7 @@ done
     export WAYLAND_DISPLAY=$sock
     unset DISPLAY
     TINTA_SCRIPT=$script exec dbus-run-session -- timeout "${TINTA_TIMEOUT:-60}" \
-        "$root/target/debug/cosmic-ext-tinta" "$@"
+        "$root/target/debug/tinta-gnome" "$@"
 ) > "$work/app.log" 2>&1 &
 app=$!
 DISPLAY=$disp "$root/target/debug/tinta-xptr" COSMIC < "$steps" || echo "tinta-xptr failed"

@@ -38,7 +38,7 @@ export WAYLAND_DISPLAY=$sock
 unset DISPLAY
 
 TINTA_SCRIPT=$script dbus-run-session -- timeout "${TINTA_TIMEOUT:-60}" \
-    "$root/target/debug/cosmic-ext-tinta" "$@" > "$work/app.log" 2>&1 &
+    "$root/target/debug/tinta-gnome" "$@" > "$work/app.log" 2>&1 &
 app=$!
 if [ -n "$keys" ]; then
     "$root/target/debug/tinta-vkbd" "$layout" < "$keys" || echo "tinta-vkbd failed"
