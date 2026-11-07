@@ -447,14 +447,30 @@ impl App {
         let Some(tab_id) = self.active_tab_id() else { return Task::none() };
         let snippets = if settings_snip { self.snippets_for_active() } else { Vec::new() };
         let Some(t) = self.tabs.get(&tab_id) else { return Task::none() };
-        let Some(e) = self.docs.get(&t.doc) else { return Task::none() };
         let head = t.cursors.head();
+        // In a comment or a string, the language's words and snippets are only in the way. The
+        // line just typed on is parsed first, so that's known now and not a frame later.
+        let doc_id = t.doc;
+        let in_text = match self.docs.get_mut(&doc_id) {
+            Some(e) => {
+                let anchor = commands::word_at(&e.doc, head).0.min(head);
+                let (line, col) = e.doc.line_col(anchor);
+                let rope = e.doc.rope.clone();
+                e.doc.highlighter.as_mut().is_some_and(|h| {
+                    h.advance(&rope, std::time::Duration::from_millis(3));
+                    h.is_noncode(line, col)
+                })
+            }
+            None => return Task::none(),
+        };
+        let snippets = if in_text { Vec::new() } else { snippets };
+        let Some(e) = self.docs.get(&doc_id) else { return Task::none() };
         let anchor = commands::word_at(&e.doc, head).0.min(head);
         let prefix = e.doc.slice_string(anchor, head);
         let mut entries = Vec::new();
         // The language's own words, by what's typed so far: keywords, and what comes with it.
         let lower = prefix.to_lowercase();
-        let language_words = tinta_core::keywords::for_language(&e.doc.language.name);
+        let language_words = if in_text { Vec::new() } else { tinta_core::keywords::for_language(&e.doc.language.name) };
         if !prefix.is_empty() {
             for (w, kind) in &language_words {
                 if !w.to_lowercase().starts_with(&lower) || *w == prefix {

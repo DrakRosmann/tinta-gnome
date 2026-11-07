@@ -557,6 +557,20 @@ fn completion_offers_the_language_words_as_you_type() {
     ui.key("enter", Modifiers::empty(), None);
     assert_eq!(ui.app.active().unwrap().1.doc.line_text(1).trim_end(), "    println!");
 
+    // Not in a comment or a string, where they'd only be in the way.
+    ui.typed("(\"pri");
+    assert!(!labels(&ui).contains(&"println!".to_string()), "in a string: {:?}", labels(&ui));
+    ui.key("escape", Modifiers::empty(), None);
+    ui.key("end", Modifiers::empty(), None);
+    ui.key("enter", Modifiers::empty(), None);
+    ui.typed("// pri");
+    assert!(!labels(&ui).contains(&"println!".to_string()), "in a comment: {:?}", labels(&ui));
+    ui.key("escape", Modifiers::empty(), None);
+    ui.key("enter", Modifiers::empty(), None);
+    ui.typed("pri");
+    assert!(labels(&ui).contains(&"println!".to_string()), "back in code: {:?}", labels(&ui));
+    ui.key("escape", Modifiers::empty(), None);
+
     // Each language its own: C has printf and its keywords, Rust's macros are not there.
     let c = dir.join("prog.c");
     std::fs::write(&c, "int main(void) {\n    \n}\n").unwrap();
