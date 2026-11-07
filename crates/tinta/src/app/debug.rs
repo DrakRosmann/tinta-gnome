@@ -165,7 +165,7 @@ impl App {
             }
             None => None,
         };
-        match Debugger::start(&plan, &self.debug.watches, sink, tty.as_ref().map(|t| t.path.as_path())) {
+        match Debugger::start(&plan, &self.debug.watches, sink, tty.as_ref()) {
             Ok(s) => {
                 self.debug.session = Some(s);
                 match tty {

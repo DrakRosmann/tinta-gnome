@@ -485,8 +485,16 @@ fn read_message(r: &mut impl BufRead) -> Option<Value> {
 }
 
 impl Client {
-    fn start(adapter: &Adapter, cwd: &Path, sink: Sink) -> std::io::Result<Self> {
-        let mut child = crate::host::command(&adapter.command, &adapter.args, Some(cwd), &[])
+    fn start(adapter: &Adapter, cwd: &Path, sink: Sink, tty: Option<&ProgramTty>) -> std::io::Result<Self> {
+        let mut command = match tty {
+            // From a Flatpak, gdb gets the program's terminal as its fd 3.
+            Some(t) if crate::host::sandboxed() && adapter.kind == "gdb" => {
+                use std::os::fd::AsRawFd;
+                crate::host::command_with_fd(&adapter.command, &adapter.args, Some(cwd), &[], t.slave.as_raw_fd())
+            }
+            _ => crate::host::command(&adapter.command, &adapter.args, Some(cwd), &[]),
+        };
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -541,6 +549,14 @@ impl Client {
         seq
     }
 
+    fn respond(&self, request_seq: i64, command: &str, body: Value) {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+        self.send(&json!({
+            "seq": seq, "type": "response", "request_seq": request_seq, "command": command,
+            "success": true, "body": body,
+        }));
+    }
+
     fn refuse(&self, request_seq: i64, command: &str) {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         self.send(&json!({
@@ -565,11 +581,10 @@ impl Drop for Client {
 
 impl LaunchConfig {
     /// The program gets a terminal: what it prints goes there, and it reads what's typed in it.
-    /// Only gdb is given one, which it takes before the program starts; with the other
-    /// debuggers the program stays in the console.
+    /// Gdb takes one before the program starts; debugpy asks the editor to start the program in
+    /// one. With the other debuggers the program stays in the console.
     pub fn wants_terminal(&self) -> bool {
-        // In a Flatpak, gdb runs outside the sandbox and can't reach a terminal opened inside it.
-        self.console != "internalConsole" && self.kind == "gdb" && !crate::host::sandboxed()
+        self.console != "internalConsole" && matches!(normalize_kind(&self.kind), "gdb" | "python")
     }
 }
 
@@ -581,8 +596,8 @@ pub struct ProgramTty {
     pub master: std::os::fd::OwnedFd,
     pub path: PathBuf,
     /// Held open so the terminal doesn't see the end of its input before the program starts,
-    /// or between one run and the next.
-    _slave: std::os::fd::OwnedFd,
+    /// or between one run and the next. In a Flatpak it's also what gdb gets, as its fd 3.
+    slave: std::os::fd::OwnedFd,
 }
 
 pub fn open_tty() -> std::io::Result<ProgramTty> {
@@ -608,7 +623,7 @@ pub fn open_tty() -> std::io::Result<ProgramTty> {
         if slave < 0 {
             return Err(err());
         }
-        Ok(ProgramTty { master, path, _slave: OwnedFd::from_raw_fd(slave) })
+        Ok(ProgramTty { master, path, slave: OwnedFd::from_raw_fd(slave) })
     }
 }
 
@@ -773,6 +788,38 @@ fn check_program(c: &LaunchConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// The debugger's `runInTerminal`: the command it gives, started in the program's terminal as
+/// a session of its own, the terminal its controlling one, as a shell would. Its pid back.
+fn run_in_terminal(args: &Value, tty: &Path) -> std::io::Result<u32> {
+    use std::os::unix::process::CommandExt;
+    let argv: Vec<String> = args["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str().map(str::to_string)).collect();
+    let (program, rest) = argv.split_first().ok_or_else(|| std::io::Error::other("no command"))?;
+    let open = || std::fs::OpenOptions::new().read(true).write(true).open(tty);
+    // The program is the user's, so it runs on their system; in a Flatpak, flatpak-spawn
+    // hands it this terminal as its input and output.
+    let cwd = args["cwd"].as_str().filter(|c| !c.is_empty()).map(Path::new);
+    let env: Vec<(String, String)> = args["env"].as_object().into_iter().flatten().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect();
+    let env: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let mut cmd = crate::host::command(program, rest, cwd, &env);
+    cmd.stdin(open()?).stdout(open()?).stderr(open()?);
+    // SAFETY: only async-signal-safe calls, between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    // Reaped when it ends, so it doesn't linger as a zombie.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
+}
+
 /// `setBreakpoints` for a file: the lines asked for, and the arguments. `extra` is one more line.
 fn breakpoint_args(path: &Path, list: &[Breakpoint], extra: Option<usize>) -> (Vec<usize>, Value) {
     let active: Vec<&Breakpoint> = list.iter().filter(|b| b.enabled).collect();
@@ -798,11 +845,12 @@ fn breakpoint_args(path: &Path, list: &[Breakpoint], extra: Option<usize>) -> (V
 }
 
 impl Debugger {
-    pub fn start(plan: &Plan, watches: &[String], sink: Sink, tty: Option<&Path>) -> Result<Self, String> {
+    pub fn start(plan: &Plan, watches: &[String], sink: Sink, tty: Option<&ProgramTty>) -> Result<Self, String> {
         let adapter = resolve_adapter(&plan.config.kind)?;
         check_program(&plan.config)?;
         let cwd = Path::new(&plan.config.cwd);
-        let client = Client::start(&adapter, if cwd.is_dir() { cwd } else { &plan.root }, sink).map_err(|e| format!("{}: {e}", adapter.command))?;
+        let tty = tty.filter(|_| matches!(adapter.kind.as_str(), "gdb" | "python"));
+        let client = Client::start(&adapter, if cwd.is_dir() { cwd } else { &plan.root }, sink, tty).map_err(|e| format!("{}: {e}", adapter.command))?;
         let launch_last = adapter.kind == "gdb" && gdb_runs_on_launch();
         let mut launch = launch_arguments(&plan.config);
         if launch_last {
@@ -833,10 +881,12 @@ impl Debugger {
             launch_last,
             program_seen: false,
             start_limit: if launch_last { START_LIMIT_LAUNCH_LAST } else { START_LIMIT },
-            tty: tty.filter(|_| adapter.kind == "gdb").map(Path::to_path_buf),
+            // gdb on the other side of a Flatpak reaches the terminal through the fd it was given:
+            // the program it starts inherits it, and opens it again by this name.
+            tty: tty.map(|t| if crate::host::sandboxed() && adapter.kind == "gdb" { PathBuf::from("/proc/self/fd/3") } else { t.path.clone() }),
             run_to: None,
         };
-        let args = json!({
+        let mut args = json!({
             "clientID": "tinta",
             "clientName": "Tinta",
             "adapterID": adapter.kind,
@@ -845,6 +895,11 @@ impl Debugger {
             "columnsStartAt1": true,
             "supportsVariableType": true,
         });
+        // Debugpy starts the program through us, in the program's terminal.
+        if d.tty.is_some() && d.kind == "python" {
+            args["supportsRunInTerminalRequest"] = json!(true);
+            d.launch["console"] = json!("integratedTerminal");
+        }
         d.send(Pending::Initialize, "initialize", args);
         Ok(d)
     }
@@ -1124,8 +1179,18 @@ impl Debugger {
                 Some("response") => self.on_response(&m, bps),
                 Some("event") => self.on_event(&m, bps),
                 Some("request") => {
-                    // We told it we have no terminal to offer, so nothing should come here.
-                    self.client.refuse(m["seq"].as_i64().unwrap_or(0), m["command"].as_str().unwrap_or(""));
+                    let seq = m["seq"].as_i64().unwrap_or(0);
+                    let command = m["command"].as_str().unwrap_or("");
+                    match (command, &self.tty) {
+                        ("runInTerminal", Some(tty)) => match run_in_terminal(&m["arguments"], tty) {
+                            Ok(pid) => self.client.respond(seq, command, json!({ "processId": pid })),
+                            Err(e) => {
+                                self.client.refuse(seq, command);
+                                return vec![Notice::Output { category: "stderr".into(), text: format!("runInTerminal: {e}\n") }];
+                            }
+                        },
+                        _ => self.client.refuse(seq, command),
+                    }
                     Vec::new()
                 }
                 _ => Vec::new(),
@@ -1279,7 +1344,7 @@ impl Debugger {
                     return vec![Notice::Failed(message)];
                 }
                 self.capabilities = body.clone();
-                if let Some(tty) = self.tty.clone() {
+                if let Some(tty) = self.tty.clone().filter(|_| self.kind == "gdb") {
                     let cmd = format!("set inferior-tty {}", tty.display());
                     self.send(Pending::Quiet, "evaluate", json!({ "expression": cmd, "context": "repl" }));
                 }
@@ -1679,9 +1744,16 @@ mod tests {
         assert_eq!(newest_executable(&dir), Some(elf));
     }
 
+    /// A C file built for debugging, with the user's compiler.
+    fn compile(src: &Path, exe: &Path) -> bool {
+        let args = [std::ffi::OsStr::new("-g"), "-O0".as_ref(), src.as_os_str(), "-o".as_ref(), exe.as_os_str()];
+        crate::host::command("cc", args, None, &[]).status().is_ok_and(|s| s.success())
+    }
+
     fn tempfile() -> PathBuf {
         static N: AtomicI64 = AtomicI64::new(0);
-        let d = std::env::temp_dir().join(format!("tinta-dap-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        // Where the user's programs (cc, gdb) see it too, in a Flatpak as well.
+        let d = crate::host::temp_dir().join(format!("tinta-dap-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -1773,8 +1845,7 @@ int main(void) {
         let src = dir.join("prog.c");
         std::fs::write(&src, PROGRAM).unwrap();
         let exe = dir.join("prog");
-        let status = Command::new("cc").args(["-g", "-O0"]).arg(&src).arg("-o").arg(&exe).status().ok()?;
-        if !status.success() {
+        if !compile(&src, &exe) {
             return None;
         }
         let config = LaunchConfig {
@@ -1886,7 +1957,7 @@ int main(void) {
         )
         .unwrap();
         let exe = dir.join("le");
-        assert!(Command::new("cc").args(["-g", "-O0"]).arg(&src).arg("-o").arg(&exe).status().unwrap().success());
+        assert!(compile(&src, &exe));
         let mut plan = plan;
         plan.config.program = exe.to_string_lossy().into_owned();
         assert!(plan.config.wants_terminal());
@@ -1915,7 +1986,7 @@ int main(void) {
         });
         let mut bps = Breakpoints::new();
         bps.insert(src.clone(), vec![Breakpoint::at(4)]);
-        let mut r = Rig { d: Debugger::start(&plan, &[], sink, Some(&tty.path)).unwrap(), rx, bps, notices: Vec::new() };
+        let mut r = Rig { d: Debugger::start(&plan, &[], sink, Some(&tty)).unwrap(), rx, bps, notices: Vec::new() };
         typed.write_all(b"21\n").unwrap();
         r.until("after scanf", |r| r.stopped_with_vars() && r.line() == 4);
         assert_eq!(r.var("Locals/n").as_deref(), Some("21"), "read from the terminal");
@@ -1948,13 +2019,71 @@ int main(void) {
     }
 
     #[test]
+    fn a_python_program_in_its_terminal() {
+        if resolve_adapter("python").is_err() {
+            eprintln!("skipped: no debugpy");
+            return;
+        }
+        let dir = tempfile();
+        let src = dir.join("le.py");
+        std::fs::write(&src, "n = int(input('numero: '))\ndobro = n * 2\nprint('dobro', dobro)\n").unwrap();
+        let config = LaunchConfig { name: "le".into(), kind: "python".into(), program: src.to_string_lossy().into_owned(), cwd: dir.to_string_lossy().into_owned(), ..LaunchConfig::default() };
+        assert!(config.wants_terminal());
+        let plan = Plan { root: dir, config, program_from: ProgramFrom::Known };
+        let tty = open_tty().unwrap();
+        let mut typed = std::fs::File::from(tty.master.try_clone().unwrap());
+        let shown = Arc::new(Mutex::new(String::new()));
+        {
+            let mut out = std::fs::File::from(tty.master.try_clone().unwrap());
+            let shown = shown.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 512];
+                while let Ok(n) = out.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    shown.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+            });
+        }
+        let (tx, rx) = channel();
+        let tx = Mutex::new(tx);
+        let sink: Sink = Arc::new(move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        });
+        let mut bps = Breakpoints::new();
+        bps.insert(src.clone(), vec![Breakpoint::at(1)]);
+        let mut r = Rig { d: Debugger::start(&plan, &[], sink, Some(&tty)).unwrap(), rx, bps, notices: Vec::new() };
+        // The prompt shows in the terminal, and what's typed there is what input() reads.
+        let end = Instant::now() + Duration::from_secs(20);
+        while !shown.lock().unwrap().contains("numero:") && Instant::now() < end {
+            if let Ok(m) = r.rx.recv_timeout(Duration::from_millis(100)) {
+                let n = r.d.handle(m, &mut r.bps);
+                r.notices.extend(n);
+            }
+        }
+        assert!(shown.lock().unwrap().contains("numero:"), "the terminal showed {:?}\n{:?}", shown.lock().unwrap(), r.notices);
+        typed.write_all(b"21\n").unwrap();
+        // At the module's level, n is in Locals or Globals depending on debugpy's version.
+        r.until("after input", |r| r.stopped_with_vars() && r.line() == 1 && (r.var("Locals/n").is_some() || r.var("Globals/n").is_some()));
+        assert_eq!(r.var("Locals/n").or_else(|| r.var("Globals/n")).as_deref(), Some("21"));
+        r.d.continue_();
+        r.until("the end", |r| !r.d.is_live());
+        let end = Instant::now() + Duration::from_secs(5);
+        while !shown.lock().unwrap().contains("dobro 42") && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(shown.lock().unwrap().contains("dobro 42"), "{:?}", shown.lock().unwrap());
+    }
+
+    #[test]
     fn conditions_and_disabled_breakpoints() {
         let Some((src, plan)) = c_program() else { return };
         let dir = plan.root.clone();
         let looped = dir.join("laco.c");
         std::fs::write(&looped, "int main(void) {\n    int s = 0;\n    for (int i = 0; i < 9; i++) {\n        s += i;\n    }\n    return s;\n}\n").unwrap();
         let exe = dir.join("laco");
-        assert!(Command::new("cc").args(["-g", "-O0"]).arg(&looped).arg("-o").arg(&exe).status().unwrap().success());
+        assert!(compile(&looped, &exe));
         let mut plan = plan;
         plan.config.program = exe.to_string_lossy().into_owned();
         let mut off = Breakpoint::at(1);
@@ -2025,7 +2154,7 @@ int main(void) {
         let src = dir.join("o'programa novo.c");
         std::fs::write(&src, PROGRAM).unwrap();
         let exe = dir.join("o'programa novo");
-        assert!(Command::new("cc").args(["-g", "-O0"]).arg(&src).arg("-o").arg(&exe).status().unwrap().success());
+        assert!(compile(&src, &exe));
         let mut bps = Breakpoints::new();
         bps.insert(src, vec![Breakpoint::at(5)]);
         let mut r = Rig::start(&plan_for(&exe, &dir), bps);
@@ -2129,16 +2258,16 @@ int main(void) {
         bps.insert(src, vec![Breakpoint::at(5)]);
         let mut r = Rig::start(&plan, bps);
         r.until("stop", Rig::stopped_with_vars);
-        let pid = {
-            // The debuggee is whatever is running the program from that folder.
-            let out = Command::new("pgrep").arg("-f").arg(&plan.config.program).output().unwrap();
-            String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.parse::<u32>().ok()).collect::<Vec<_>>()
+        // The debuggee is whatever is running the program from that folder. From a Flatpak, the
+        // system's pgrep also sees the sandbox's own flatpak-spawn asking, which isn't it.
+        let running = || -> Vec<String> {
+            let out = crate::host::command("pgrep", ["-af", plan.config.program.as_str()], None, &[]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.contains("pgrep")).map(str::to_string).collect()
         };
-        assert!(!pid.is_empty());
+        assert!(!running().is_empty());
         r.d.stop();
         drop(r);
         std::thread::sleep(Duration::from_millis(1500));
-        let out = Command::new("pgrep").arg("-f").arg(&plan.config.program).output().unwrap();
-        assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty(), "left running: {}", String::from_utf8_lossy(&out.stdout));
+        assert!(running().is_empty(), "left running: {:?}", running());
     }
 }

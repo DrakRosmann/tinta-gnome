@@ -40,6 +40,42 @@ pub fn command<S: AsRef<OsStr>>(program: impl AsRef<OsStr>, args: impl IntoItera
     c
 }
 
+/// Like `command`, with `fd` of this process handed to the program as its descriptor 3: in a
+/// Flatpak that's how something open in the sandbox, like a terminal, reaches the other side.
+pub fn command_with_fd<S: AsRef<OsStr>>(
+    program: impl AsRef<OsStr>,
+    args: impl IntoIterator<Item = S>,
+    cwd: Option<&Path>,
+    env: &[(&str, &str)],
+    fd: std::os::fd::RawFd,
+) -> Command {
+    use std::os::unix::process::CommandExt;
+    let mut c = if sandboxed() {
+        let mut c = Command::new("flatpak-spawn");
+        c.args(["--host", "--watch-bus", "--forward-fd=3"]);
+        if let Some(d) = cwd {
+            c.arg(format!("--directory={}", d.display()));
+        }
+        for (k, v) in env {
+            c.arg(format!("--env={k}={v}"));
+        }
+        c.arg(program).args(args);
+        c
+    } else {
+        command(program, args, cwd, env)
+    };
+    // SAFETY: dup2 is async-signal-safe, and the copy is what the program gets as 3.
+    unsafe {
+        c.pre_exec(move || {
+            if libc::dup2(fd, 3) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    c
+}
+
 /// The arguments that start `argv` on the user's system, for whoever spawns it in their own
 /// way, like the terminal.
 pub fn argv(argv: &[String], cwd: Option<&Path>, env: &[(&str, &str)]) -> Vec<String> {

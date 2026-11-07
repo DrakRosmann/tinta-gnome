@@ -120,9 +120,9 @@ não foram experimentados.
   vai até lá
 - Pilha de chamadas e threads: clicar em um nível mostra aquele nível
 - Passar o mouse sobre um nome, com o programa pausado, mostra o valor
-- No gdb, o programa ganha um terminal próprio no painel, "Programa": a saída aparece ali, e o que
-  se digita ali chega a ele (o `scanf` e o `input` funcionam). Com `"console": "internalConsole"` no
-  `launch.json`, a saída volta para o console, sem entrada
+- No gdb e no Python (debugpy), o programa ganha um terminal próprio no painel, "Programa": a saída
+  aparece ali, e o que se digita ali chega a ele (o `scanf` e o `input` funcionam). Com
+  `"console": "internalConsole"` no `launch.json`, a saída volta para o console, sem entrada
 - Console que avalia expressões; `-exec` manda um comando ao depurador
 - Um erro de compilação aparece no código como qualquer outro, e a sessão não começa
 
@@ -202,9 +202,9 @@ de novo com `build-aux/flatpak/cargo-sources.py` sempre que o `Cargo.lock` muda.
 
 O editor fica na sandbox, mas as ferramentas são as do seu sistema: o terminal abre o seu shell, e
 git, compiladores, depuradores e servidores de linguagem rodam fora dela, por `flatpak-spawn
---host`. Por isso ele pede acesso aos arquivos e ao `org.freedesktop.Flatpak`. A única diferença: o
-programa depurado não ganha terminal próprio, porque o gdb, fora da sandbox, não alcança um terminal
-aberto dentro dela; a saída vai para o console de depuração.
+--host`. Por isso ele pede acesso aos arquivos e ao `org.freedesktop.Flatpak`. O terminal do
+programa depurado atravessa a sandbox: o gdb o recebe como um descritor aberto, e o programa
+Python nasce ligado a ele.
 
 ## Configuração
 
@@ -361,7 +361,7 @@ GPL-3.0-only. Este é um projeto independente, sem ligação com o GNOME.
 
 - Sem extensões nem edição remota.
 - No depurador: sem anexar a um processo em execução, nem breakpoints que só registram no console.
-  O terminal do programa é só no gdb: no Python, no Go e no lldb, o programa não recebe o que se
+  O terminal do programa é só no gdb e no Python: no Go e no lldb, o programa não recebe o que se
   digita.
 - No Vim: sem `:global`, `:normal`, mapeamentos próprios nem `.vimrc`.
 - A quebra de linha fica desligada em arquivos acima de 4 milhões de caracteres.
