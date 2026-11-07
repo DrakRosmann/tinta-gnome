@@ -220,6 +220,8 @@ pub enum Message {
     OpenFolderPath(PathBuf),
     /// The window became too narrow for the sidebar beside the text, or wide enough again.
     Narrow(bool),
+    /// The banner about a missing language server: copy its command, if it has one, and close it.
+    LspHintDone(String),
     OpenFiles(Vec<PathBuf>),
     SaveAsTo(TabId, PathBuf),
     Pasted(Option<String>),
@@ -327,6 +329,10 @@ pub struct App {
     pub key_passthrough: bool,
     /// The window is narrow: the sidebar floats over the text, and goes away once a file opens.
     pub narrow: bool,
+    /// Languages whose server isn't installed, by LSP id: the language's name and how to get one.
+    pub lsp_missing: HashMap<String, (String, tinta_core::lsp::InstallHint)>,
+    /// The ones the user closed the banner for, this session.
+    pub lsp_hint_closed: std::collections::HashSet<String>,
     /// The sidebar as it was before the window got narrow, to bring back when it widens.
     pub(super) sidebar_wide: Option<SidebarView>,
     pub shortcuts_filter: String,
@@ -416,6 +422,8 @@ impl App {
             modifiers: Modifiers::default(),
             key_passthrough: false,
             narrow: false,
+            lsp_missing: HashMap::new(),
+            lsp_hint_closed: Default::default(),
             sidebar_wide: None,
             shortcuts_filter: String::new(),
             title: "Tinta".into(),
@@ -650,6 +658,14 @@ impl App {
                 self.toast(text)
             }
             Message::OpenFolderPath(p) => self.open_folder(p),
+            Message::LspHintDone(lang) => {
+                let command = self.lsp_missing.get(&lang).and_then(|(_, h)| h.command.clone());
+                self.lsp_hint_closed.insert(lang);
+                if let Some(c) = command {
+                    return Task::batch([fx::clipboard_write(c), self.toast(crate::i18n::tr("Command copied: run it in a terminal"))]);
+                }
+                Task::none()
+            }
             Message::Narrow(narrow) => {
                 if narrow != self.narrow {
                     self.narrow = narrow;

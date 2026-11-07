@@ -95,6 +95,26 @@ fn sink() -> core_lsp::Sink {
 }
 
 impl App {
+    /// The banner for the file in front, when its language has no server: its LSP id, what it
+    /// says, and whether there's a command to copy.
+    pub fn lsp_hint(&self) -> Option<(String, String, bool)> {
+        let (_, e) = self.active()?;
+        let lang = e.doc.language.lsp_id?;
+        if self.lsp_hint_closed.contains(lang) || !self.settings.lsp_enabled {
+            return None;
+        }
+        let (name, h) = self.lsp_missing.get(lang)?;
+        let mut text = if crate::i18n::is_portuguese() {
+            format!("Para sugestões completas em {name}, instale o {}", h.server)
+        } else {
+            format!("For full suggestions in {name}, install {}", h.server)
+        };
+        if let Some(c) = &h.command {
+            text.push_str(&format!(": {c}"));
+        }
+        Some((lang.to_string(), text, h.command.is_some()))
+    }
+
     fn server_for(&self, doc: DocId) -> Option<&LspEntry> {
         let key = self.docs.get(&doc)?.lsp_key.as_ref()?;
         self.lsp.get(key).filter(|e| e.ready)
@@ -108,7 +128,19 @@ impl App {
         let Some(e) = self.docs.get(&doc) else { return Task::none() };
         let Some(path) = e.doc.path.clone() else { return Task::none() };
         let Some(lang) = e.doc.language.lsp_id else { return Task::none() };
-        let Some((cmd, args)) = core_lsp::resolve_server(lang, &self.settings.lsp_servers) else { return Task::none() };
+        let Some((cmd, args)) = core_lsp::resolve_server(lang, &self.settings.lsp_servers) else {
+            // Nothing installed: say so, and how to fix it. Not when the user turned it off.
+            let hint = match self.settings.lsp_servers.get(lang) {
+                Some(o) if o.command.is_empty() => None,
+                Some(o) => Some(core_lsp::InstallHint { server: o.command.clone(), command: None }),
+                None => core_lsp::install_hint(lang),
+            };
+            if let Some(h) = hint {
+                self.lsp_missing.insert(lang.to_string(), (e.doc.language.name.clone(), h));
+            }
+            return Task::none();
+        };
+        self.lsp_missing.remove(lang);
         let root = core_lsp::find_root(&path, self.folder.as_deref());
         let key = format!("{cmd}@{}", root.display());
         if let Some(entry) = self.lsp.get_mut(&key) {

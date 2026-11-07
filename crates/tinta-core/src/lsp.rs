@@ -254,6 +254,88 @@ pub fn find_in_path(cmd: &str) -> bool {
     crate::host::find(cmd)
 }
 
+/// How to get a language's server when none is installed: its name, and the command that
+/// installs it on this system, when there's one worth suggesting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallHint {
+    pub server: String,
+    pub command: Option<String>,
+}
+
+/// Which family of distributions the user's system is, from its os-release: `arch`, `fedora`,
+/// `debian`, or empty. In a Flatpak the system's file is under /run/host.
+pub fn distro_family() -> &'static str {
+    static FAMILY: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FAMILY.get_or_init(|| {
+        let text = ["/run/host/os-release", "/etc/os-release", "/usr/lib/os-release"].iter().find_map(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+        family_of(&text)
+    })
+}
+
+fn family_of(os_release: &str) -> &'static str {
+    let mut ids = Vec::new();
+    for line in os_release.lines() {
+        if let Some(v) = line.strip_prefix("ID=").or_else(|| line.strip_prefix("ID_LIKE=")) {
+            ids.extend(v.trim_matches('"').split_whitespace().map(str::to_string));
+        }
+    }
+    ["arch", "fedora", "debian", "ubuntu"]
+        .into_iter()
+        .find(|f| ids.iter().any(|i| i == f))
+        .map(|f| if f == "ubuntu" { "debian" } else { f })
+        .unwrap_or("")
+}
+
+/// The hint for a language, on this system.
+pub fn install_hint(lsp_id: &str) -> Option<InstallHint> {
+    install_hint_for(lsp_id, distro_family(), crate::host::find("rustup"))
+}
+
+/// Only packages known to exist under that name are suggested; otherwise the language's own
+/// installer, or just the server's name.
+pub fn install_hint_for(lsp_id: &str, family: &str, has_rustup: bool) -> Option<InstallHint> {
+    let manager = match family {
+        "arch" => Some("sudo pacman -S"),
+        "fedora" => Some("sudo dnf install"),
+        "debian" => Some("sudo apt install"),
+        _ => None,
+    };
+    let package = |arch: Option<&str>, fedora: Option<&str>, debian: Option<&str>| -> Option<String> {
+        let pkg = match family {
+            "arch" => arch,
+            "fedora" => fedora,
+            "debian" => debian,
+            _ => None,
+        }?;
+        Some(format!("{} {pkg}", manager?))
+    };
+    let hint = |server: &str, command: Option<String>| Some(InstallHint { server: server.to_string(), command });
+    match lsp_id {
+        "rust" if has_rustup => hint("rust-analyzer", Some("rustup component add rust-analyzer".into())),
+        "rust" => hint("rust-analyzer", package(Some("rust-analyzer"), Some("rust-analyzer"), None)),
+        "c" | "cpp" | "objective-c" | "objective-cpp" => hint("clangd", package(Some("clang"), Some("clang-tools-extra"), Some("clangd"))),
+        "python" => match family {
+            "arch" => hint("pyright", package(Some("pyright"), None, None)),
+            "fedora" | "debian" => hint("pylsp", package(None, Some("python3-lsp-server"), Some("python3-pylsp"))),
+            _ => hint("basedpyright", Some("pipx install basedpyright".into())),
+        },
+        "go" => hint("gopls", package(Some("gopls"), Some("golang-x-tools-gopls"), Some("gopls")).or(Some("go install golang.org/x/tools/gopls@latest".into()))),
+        "javascript" | "typescript" | "javascriptreact" | "typescriptreact" => hint(
+            "typescript-language-server",
+            package(Some("typescript-language-server"), None, None).or(Some("npm install -g typescript-language-server typescript".into())),
+        ),
+        "html" | "css" | "scss" | "less" | "json" => hint("vscode-langservers-extracted", Some("npm install -g vscode-langservers-extracted".into())),
+        "shellscript" => hint("bash-language-server", package(Some("bash-language-server"), None, None).or(Some("npm install -g bash-language-server".into()))),
+        "yaml" => hint("yaml-language-server", package(Some("yaml-language-server"), None, None).or(Some("npm install -g yaml-language-server".into()))),
+        "lua" => hint("lua-language-server", package(Some("lua-language-server"), None, None)),
+        "toml" => hint("taplo", package(Some("taplo-cli"), None, None).or(Some("cargo install taplo-cli --locked".into()))),
+        "markdown" => hint("marksman", package(Some("marksman"), None, None)),
+        "zig" => hint("zls", package(Some("zls"), None, None)),
+        "latex" => hint("texlab", package(Some("texlab"), None, None)),
+        other => default_servers(other).first().map(|(c, _)| InstallHint { server: c.to_string(), command: None }),
+    }
+}
+
 /// Works out which command serves this language, honouring the user's settings.
 pub fn resolve_server(lsp_id: &str, overrides: &HashMap<String, LspServer>) -> Option<(String, Vec<String>)> {
     if let Some(o) = overrides.get(lsp_id) {
@@ -966,6 +1048,24 @@ pub fn to_edits(rope: &Rope, edits: &[TextEdit]) -> Vec<crate::buffer::Edit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_hints_follow_the_distribution() {
+        assert_eq!(family_of("ID=cachyos\nID_LIKE=arch\n"), "arch");
+        assert_eq!(family_of("ID=ubuntu\nID_LIKE=debian\n"), "debian");
+        assert_eq!(family_of("ID=\"fedora\"\n"), "fedora");
+        assert_eq!(family_of("ID=nixos\n"), "");
+        let cmd = |id, fam, rustup| install_hint_for(id, fam, rustup).and_then(|h| h.command);
+        assert_eq!(cmd("c", "arch", false).as_deref(), Some("sudo pacman -S clang"));
+        assert_eq!(cmd("cpp", "fedora", false).as_deref(), Some("sudo dnf install clang-tools-extra"));
+        assert_eq!(cmd("c", "debian", false).as_deref(), Some("sudo apt install clangd"));
+        assert_eq!(cmd("rust", "debian", true).as_deref(), Some("rustup component add rust-analyzer"));
+        assert_eq!(cmd("go", "", false).as_deref(), Some("go install golang.org/x/tools/gopls@latest"));
+        // Nothing to suggest on an unknown system: the server's name is still there.
+        assert_eq!(install_hint_for("c", "", false), Some(InstallHint { server: "clangd".into(), command: None }));
+        assert_eq!(install_hint_for("haskell", "arch", false).map(|h| h.server).as_deref(), Some("haskell-language-server-wrapper"));
+        assert_eq!(install_hint_for("plaintext", "arch", false), None);
+    }
     use std::sync::mpsc::{Receiver, channel};
     use std::time::Duration;
 

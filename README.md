@@ -88,6 +88,8 @@ pyright, gopls, typescript-language-server, lua-language-server e os de mais de 
 linguagens.
 
 - Sugestões ao digitar, misturadas com palavras do arquivo e snippets
+- Sem o servidor da linguagem instalado, um aviso no topo diz qual instalar e copia o comando da
+  sua distribuição (Arch, Fedora, Debian e Ubuntu) ou do instalador da linguagem (rustup, npm, go)
 - Mesmo sem servidor, e em arquivos sem título, as sugestões trazem as palavras da linguagem: as
   palavras-chave e as funções, tipos e macros que vêm com ela (`println!`, `printf`, `len`,
   `console`…), em Rust, C, C++, Python, JavaScript, TypeScript, Go, Java, C#, Kotlin, Swift, PHP,

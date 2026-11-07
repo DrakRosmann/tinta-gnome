@@ -47,6 +47,10 @@ pub struct Window {
     main: gtk::Paned,
     /// Where the sidebar goes in a narrow window: over the text, not beside it.
     split: adw::OverlaySplitView,
+    /// Says when the file's language has no server installed, and how to get one.
+    banner: adw::Banner,
+    /// The language the banner is about, for its button.
+    banner_lang: Rc<RefCell<String>>,
     right: gtk::Paned,
     groups_box: gtk::Box,
     welcome: adw::BreakpointBin,
@@ -200,6 +204,16 @@ impl Window {
 
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
+        let banner = adw::Banner::builder().use_markup(false).revealed(false).build();
+        let banner_lang: Rc<RefCell<String>> = Default::default();
+        {
+            let (s, lang) = (Rc::downgrade(shell), banner_lang.clone());
+            banner.connect_button_clicked(move |_| {
+                let lang = lang.borrow().clone();
+                tell(&s, Message::LspHintDone(lang));
+            });
+        }
+        toolbar.add_top_bar(&banner);
         toolbar.set_content(Some(&content));
         toolbar.add_bottom_bar(&status.root);
         let overlay = gtk::Overlay::new();
@@ -217,6 +231,8 @@ impl Window {
             title,
             main,
             split,
+            banner,
+            banner_lang,
             right,
             groups_box,
             welcome,
@@ -468,6 +484,17 @@ impl Window {
             self.toolbar.set_reveal_top_bars(!app.zen);
             self.toolbar.set_reveal_bottom_bars(!app.zen);
             last.zen = Some(app.zen);
+        }
+        match app.lsp_hint() {
+            Some((lang, text, has_command)) => {
+                if self.banner.title() != text {
+                    self.banner.set_title(&text);
+                }
+                self.banner.set_button_label(Some(tr(if has_command { "Copy Command" } else { "Got It" })));
+                *self.banner_lang.borrow_mut() = lang;
+                self.banner.set_revealed(true);
+            }
+            None => self.banner.set_revealed(false),
         }
         let sidebar = if app.zen { None } else { app.sidebar };
         if last.sidebar != Some((sidebar, app.narrow)) {

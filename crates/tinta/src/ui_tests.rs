@@ -587,6 +587,32 @@ fn completion_offers_the_language_words_as_you_type() {
 }
 
 #[test]
+fn a_language_without_its_server_says_how_to_get_one() {
+    let dir = temp_dir("nolsp");
+    let lua = dir.join("a.lua");
+    std::fs::write(&lua, "print(1)\n").unwrap();
+    let mut ui = Ui::new(Vec::new());
+    // A server that can't be there, so the test doesn't depend on what this machine has.
+    ui.app.settings.lsp_servers.insert("lua".into(), tinta_core::settings::LspServer { command: "nao-existe-servidor".into(), args: Vec::new() });
+    let t = ui.app.open_path(&lua);
+    ui.run(t);
+    let (lang, text, has_command) = ui.app.lsp_hint().expect("a hint for Lua");
+    assert_eq!(lang, "lua");
+    assert!(text.contains("Lua") && text.contains("nao-existe-servidor"), "{text}");
+    assert!(!has_command, "nothing to install for a command the user picked");
+    // Closed: it stays closed for the session.
+    ui.msg(Message::LspHintDone(lang));
+    assert!(ui.app.lsp_hint().is_none());
+    // Turned off on purpose: no hint at all.
+    let py = dir.join("a.py");
+    std::fs::write(&py, "print(1)\n").unwrap();
+    ui.app.settings.lsp_servers.insert("python".into(), tinta_core::settings::LspServer { command: String::new(), args: Vec::new() });
+    let t = ui.app.open_path(&py);
+    ui.run(t);
+    assert!(ui.app.lsp_hint().is_none());
+}
+
+#[test]
 fn palette_filters_and_runs_a_clicked_command() {
     let (mut ui, _) = Ui::with_file();
     ui.cmd(Command::CommandPalette);
