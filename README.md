@@ -103,10 +103,16 @@ não foram experimentados.
 
 - Breakpoints com um clique à esquerda dos números de linha ou `F9`, condicionais com `Shift+F9`.
   Acompanham o código quando o arquivo muda e continuam lá da próxima vez
-- Variáveis em árvore, com o que mudou desde a última parada em destaque, e expressões observadas
+- Variáveis em árvore, com o que mudou desde a última parada em destaque, e expressões observadas.
+  Um clique duplo no valor, ou "Mudar valor…" no botão direito, troca o valor com o programa pausado
+- `Ctrl+F10` roda até a linha do cursor, sem deixar breakpoint para trás; sem sessão, começa uma e
+  vai até lá
 - Pilha de chamadas e threads: clicar em um nível mostra aquele nível
 - Passar o mouse sobre um nome, com o programa pausado, mostra o valor
-- Console com a saída do programa, que avalia expressões; `-exec` manda um comando ao depurador
+- No gdb, o programa ganha um terminal próprio no painel, "Programa": a saída aparece ali, e o que
+  se digita ali chega a ele (o `scanf` e o `input` funcionam). Com `"console": "internalConsole"` no
+  `launch.json`, a saída volta para o console, sem entrada
+- Console que avalia expressões; `-exec` manda um comando ao depurador
 - Um erro de compilação aparece no código como qualquer outro, e a sessão não começa
 
 Sem configuração, ele compila o arquivo aberto (C e C++), usa `cargo`, `make` ou `cmake`, ou roda o
@@ -123,7 +129,8 @@ também o formato do VS Code. O comando "Editar launch.json" cria um modelo:
     "args": ["--porta", "8080"],
     "cwd": "${workspaceFolder}",
     "env": { "LOG": "debug" },
-    "stopOnEntry": false
+    "stopOnEntry": false,
+    "console": "integratedTerminal" // ou "internalConsole"
   }
 ]
 ```
@@ -325,8 +332,8 @@ GPL-3.0-only. Este é um projeto independente, sem ligação com o GNOME.
 ## O que falta
 
 - Sem extensões nem edição remota.
-- No depurador: sem anexar a um processo em execução, mudar o valor de uma variável, "rodar até o
-  cursor" ou breakpoints que só registram no console, e o programa depurado não recebe o que se digita
-  (a entrada padrão). Para isso, use o terminal.
+- No depurador: sem anexar a um processo em execução, nem breakpoints que só registram no console.
+  O terminal do programa é só no gdb: no Python, no Go e no lldb, o programa não recebe o que se
+  digita.
 - No Vim: sem `:global`, `:normal`, mapeamentos próprios nem `.vimrc`.
 - A quebra de linha fica desligada em arquivos acima de 4 milhões de caracteres.

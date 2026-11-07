@@ -300,6 +300,7 @@ impl App {
                 }
             }
             C::ToggleBreakpoint => return self.toggle_breakpoint_here(),
+            C::RunToCursor => return self.debug_run_to_cursor(),
             C::BreakpointCondition => return self.start_breakpoint_condition(),
             C::RemoveBreakpoints => {
                 let paths: Vec<_> = self.debug.breakpoints.keys().cloned().collect();
@@ -858,6 +859,12 @@ impl App {
                     Some(DialogState::RenameSymbol) => self.do_rename(input),
                     Some(DialogState::BreakpointCondition(path, line)) => {
                         self.set_breakpoint_condition(path, line, input);
+                        Task::none()
+                    }
+                    Some(DialogState::SetValue(row)) => {
+                        if let Some(s) = &mut self.debug.session {
+                            s.set_value(&row, input.trim());
+                        }
                         Task::none()
                     }
                     Some(DialogState::ConfirmDiscard(entry)) => self.git_discard(entry),

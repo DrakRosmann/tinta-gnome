@@ -25,6 +25,8 @@ pub enum Effect {
     Screenshot(PathBuf),
     /// Terminals live on the GTK side; these reach them by id.
     TermSpawn { id: u64, cwd: PathBuf },
+    /// A terminal over a pseudo-terminal opened elsewhere, the debugged program's.
+    TermAttach { id: u64, master: std::os::fd::OwnedFd },
     TermInput { id: u64, text: String },
     TermCopy(u64),
     TermPaste(u64),

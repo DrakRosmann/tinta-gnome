@@ -173,6 +173,7 @@ commands! {
     StepOver, "debug.stepOver", "Step Over", "Próxima linha", ["f10"];
     StepInto, "debug.stepIn", "Step Into", "Entrar na função", [];
     StepOut, "debug.stepOut", "Step Out", "Sair da função", ["shift+f11"];
+    RunToCursor, "debug.runToCursor", "Run to Cursor", "Executar até o cursor", ["ctrl+f10"];
     ToggleBreakpoint, "debug.breakpoint", "Toggle Breakpoint", "Alternar breakpoint", ["f9"];
     BreakpointCondition, "debug.condition", "Conditional Breakpoint…", "Breakpoint condicional…", ["shift+f9"];
     RemoveBreakpoints, "debug.removeBreakpoints", "Remove All Breakpoints", "Remover todos os breakpoints", [];

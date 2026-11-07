@@ -201,6 +201,48 @@ impl Panel {
     }
 
     pub fn spawn_terminal(&self, shell: &Rc<Shell>, id: u64, cwd: &Path) {
+        let term = self.terminal_widget(shell, id);
+        let shell_cmd = {
+            let configured = shell.app.borrow().settings.terminal_shell.clone();
+            if configured.trim().is_empty() { std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()) } else { configured }
+        };
+        let env = ["TERM_PROGRAM=tinta", "COLORTERM=truecolor"];
+        term.spawn_async(
+            vte::PtyFlags::DEFAULT,
+            cwd.to_str(),
+            &[shell_cmd.as_str()],
+            &env,
+            glib::SpawnFlags::SEARCH_PATH,
+            || {},
+            -1,
+            gio::Cancellable::NONE,
+            |r| {
+                if let Err(e) = r {
+                    log::warn!("terminal: {e}");
+                }
+            },
+        );
+        self.add_terminal(id, term);
+    }
+
+    /// The debugged program's terminal: nothing is started here, the debugger runs the program
+    /// on the other end.
+    pub fn attach_terminal(&self, shell: &Rc<Shell>, id: u64, master: std::os::fd::OwnedFd) {
+        let term = self.terminal_widget(shell, id);
+        match vte::Pty::foreign_sync(master, gio::Cancellable::NONE) {
+            Ok(pty) => term.set_pty(Some(&pty)),
+            Err(e) => log::warn!("program terminal: {e}"),
+        }
+        self.add_terminal(id, term);
+    }
+
+    fn add_terminal(&self, id: u64, term: vte::Terminal) {
+        self.term_stack.add_named(&term, Some(&format!("t{id}")));
+        self.term_stack.set_visible_child(&term);
+        self.terms.borrow_mut().insert(id, term);
+    }
+
+    fn terminal_widget(&self, shell: &Rc<Shell>, id: u64) -> vte::Terminal {
         let term = vte::Terminal::new();
         term.set_font(Some(&Self::mono_font()));
         Self::paint(&term, adw::StyleManager::default().is_dark());
@@ -245,29 +287,7 @@ impl Panel {
             }
         });
         term.add_controller(focus);
-        let shell_cmd = {
-            let configured = shell.app.borrow().settings.terminal_shell.clone();
-            if configured.trim().is_empty() { std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()) } else { configured }
-        };
-        let env = ["TERM_PROGRAM=tinta", "COLORTERM=truecolor"];
-        term.spawn_async(
-            vte::PtyFlags::DEFAULT,
-            cwd.to_str(),
-            &[shell_cmd.as_str()],
-            &env,
-            glib::SpawnFlags::SEARCH_PATH,
-            || {},
-            -1,
-            gio::Cancellable::NONE,
-            |r| {
-                if let Err(e) = r {
-                    log::warn!("terminal: {e}");
-                }
-            },
-        );
-        self.term_stack.add_named(&term, Some(&format!("t{id}")));
-        self.term_stack.set_visible_child(&term);
-        self.terms.borrow_mut().insert(id, term);
+        term
     }
 
     pub fn paste_text(&self, id: u64, text: &str) {

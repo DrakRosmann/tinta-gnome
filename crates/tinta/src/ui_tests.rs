@@ -1075,7 +1075,25 @@ fn debugging_a_program_through_the_interface() {
     ui.key("f5", Modifiers::empty(), None);
     assert_eq!(ui.app.sidebar, Some(crate::app::SidebarView::Debug));
     wait_long(&mut ui, |a| a.debug.is_stopped() && a.debug.session.as_ref().is_some_and(|s| !s.variable_rows().is_empty()));
-    assert_eq!(ui.app.panel, Some(crate::app::PanelView::Debug));
+    // The program has a terminal of its own in the panel; what it prints comes out there.
+    assert_eq!(ui.app.panel, Some(crate::app::PanelView::Terminal));
+    let (term, tty) = ui.app.debug.tty.as_ref().expect("the program's terminal");
+    assert!(ui.app.terms.iter().any(|t| t.id == *term && t.title.ends_with("prog.c")), "{:?}", ui.app.terms.iter().map(|t| &t.title).collect::<Vec<_>>());
+    let shown = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    {
+        use std::io::Read;
+        let mut out = std::fs::File::from(tty.master.try_clone().unwrap());
+        let shown = shown.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            while let Ok(n) = out.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                shown.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        });
+    }
     let loc = |ui: &Ui| ui.app.debug.session.as_ref().unwrap().exec_location().map(|(_, l, top)| (l, top));
     assert_eq!(loc(&ui), Some((5, true)));
     assert_eq!(ui.head().0, 5, "the caret goes to where it stopped");
@@ -1086,6 +1104,15 @@ fn debugging_a_program_through_the_interface() {
     let value = |a: &App, path: &str| a.debug.session.as_ref()?.variable_rows().into_iter().find(|r| r.path == path).map(|r| r.value);
     wait_long(&mut ui, |a| a.debug.is_stopped() && a.debug.session.as_ref().unwrap().exec_location().is_some_and(|l| l.1 == 6) && value(a, "Locals/r").is_some());
     assert_eq!(value(&ui.app, "Locals/r").as_deref(), Some("6"));
+
+    // A new value for r, through the dialog: dobro now returns 20.
+    let row = ui.app.debug.session.as_ref().unwrap().variable_rows().into_iter().find(|r| r.path == "Locals/r").unwrap();
+    let _ = ui.app.update(Message::Debug(crate::app::DebugMsg::EditValue(row)));
+    assert!(matches!(ui.app.dialog, Some(crate::app::DialogState::SetValue(_))));
+    assert_eq!(ui.app.dialog_input, "6");
+    let _ = ui.app.update(Message::Dialog(crate::app::DialogMsg::Input("20".into())));
+    let _ = ui.app.update(Message::Dialog(crate::app::DialogMsg::Primary));
+    wait_long(&mut ui, |a| value(a, "Locals/r").as_deref() == Some("20"));
 
     // The call stack is clickable: the frame's variables and line come up.
     let _ = ui.app.update(Message::Debug(crate::app::DebugMsg::SelectFrame(1)));
@@ -1104,28 +1131,60 @@ fn debugging_a_program_through_the_interface() {
     let tab = ui.app.active_tab_id().unwrap();
     ui.app.hover = None;
     let _ = ui.app.update(Message::Editor(tab, crate::ui::editor_view::EditorEvent::Hover { row: 6, vcol: 11 }));
-    wait_long(&mut ui, |a| a.hover.as_ref().is_some_and(|h| h.text == "r = 6"));
+    wait_long(&mut ui, |a| a.hover.as_ref().is_some_and(|h| h.text == "r = 20"));
     // Even over the right half of the letter, where the position rounds to the char after it.
     ui.app.hover = None;
     let _ = ui.app.update(Message::Editor(tab, crate::ui::editor_view::EditorEvent::Hover { row: 6, vcol: 12 }));
-    wait_long(&mut ui, |a| a.hover.as_ref().is_some_and(|h| h.text == "r = 6"));
+    wait_long(&mut ui, |a| a.hover.as_ref().is_some_and(|h| h.text == "r = 20"));
 
     // The console evaluates.
     let _ = ui.app.update(Message::Debug(crate::app::DebugMsg::Input("2 + 3".into())));
     let _ = ui.app.update(Message::Debug(crate::app::DebugMsg::Submit));
     wait_long(&mut ui, |a| a.debug.console.iter().any(|l| l.text == "5"));
 
-    // Off to the end: the program's output and its exit code come through, and the session closes.
+    // Ctrl+F10 runs on to the line with the caret, the printf, without a breakpoint there.
+    ui.app.jump_to(13, 0);
+    ui.key("f10", Modifiers::CTRL, None);
+    wait_long(&mut ui, |a| a.debug.is_stopped() && a.debug.session.as_ref().unwrap().exec_location().is_some_and(|l| l.1 == 13) && value(a, "Locals/total").is_some());
+    assert_eq!(value(&ui.app, "Locals/total").as_deref(), Some("24"), "20 from dobro, plus 4");
+    assert_eq!(ui.app.debug.breakpoints[&src].iter().map(|b| b.line).collect::<Vec<_>>(), vec![5]);
+
+    // Off to the end: the output in the program's terminal, the exit code in the console.
     ui.key("f5", Modifiers::empty(), None);
     wait_long(&mut ui, |a| a.debug.session.is_none());
+    let end = Instant::now() + std::time::Duration::from_secs(5);
+    while !shown.lock().unwrap().contains("total 24") && Instant::now() < end {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(shown.lock().unwrap().contains("total 24"), "{:?}", shown.lock().unwrap());
     let text: Vec<_> = ui.app.debug.console.iter().map(|l| l.text.as_str()).collect();
-    assert!(text.contains(&"total 10"), "{text:?}");
     assert!(text.iter().any(|l| l.ends_with(" 7")), "{text:?}");
     assert!(ui.app.debug.breakpoints[&src][0].line == 5, "the breakpoint stays for next time");
 
     // Without a session, F11 is full screen again.
     assert!(!ui.app.debug.is_live());
     ui.frame();
+}
+
+#[test]
+fn run_to_cursor_starts_a_session_and_goes_there() {
+    if !have_gdb_dap() {
+        eprintln!("skipped: no gdb with DAP");
+        return;
+    }
+    let dir = temp_dir("runto");
+    let src = dir.join("prog.c");
+    std::fs::write(&src, DEBUG_PROGRAM).unwrap();
+    let mut ui = Ui::new(vec![src.clone()]);
+    ui.frame();
+    // No breakpoints and nothing running: Ctrl+F10 on the printf starts and stops there.
+    ui.app.jump_to(13, 0);
+    ui.key("f10", Modifiers::CTRL, None);
+    let at = |a: &App| a.debug.session.as_ref().and_then(|s| s.exec_location()).map(|(_, l, _)| l);
+    wait_long(&mut ui, |a| a.debug.is_stopped() && at(a) == Some(13));
+    assert!(ui.app.debug.breakpoints.get(&src).is_none_or(|l| l.is_empty()), "no breakpoint left behind");
+    ui.cmd(Command::DebugStop);
+    wait_long(&mut ui, |a| !a.debug.is_live());
 }
 
 #[test]

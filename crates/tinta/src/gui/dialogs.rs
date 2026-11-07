@@ -91,6 +91,7 @@ impl Dialogs {
                 false,
                 None,
             ),
+            DialogState::SetValue(row) => (format!("{}: {}", tr("New value"), row.name), String::new(), Some("42"), "OK", false, None),
             DialogState::ConfirmDiscard(e) => (e.path.clone(), tr("Discard changes to this file? This cannot be undone.").into(), None, "Discard Changes", true, None),
             DialogState::About | DialogState::Shortcuts => unreachable!(),
         };

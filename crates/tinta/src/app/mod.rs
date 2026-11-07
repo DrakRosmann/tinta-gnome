@@ -114,6 +114,8 @@ pub enum DialogState {
     TrashPath(PathBuf),
     RenameSymbol,
     BreakpointCondition(PathBuf, usize),
+    /// A new value for a variable, or a watched expression, of the paused program.
+    SetValue(tinta_core::dap::VarRow),
     ConfirmDiscard(tinta_core::git::StatusEntry),
     About,
     Shortcuts,
@@ -740,6 +742,9 @@ impl App {
             Message::TermKill(i) => {
                 if i < self.terms.len() {
                     let t = self.terms.remove(i);
+                    if self.debug.tty.as_ref().is_some_and(|(id, _)| *id == t.id) {
+                        self.debug.tty = None;
+                    }
                     let kill = Task::effect(fx::Effect::TermKill(t.id));
                     self.active_term = self.active_term.min(self.terms.len().saturating_sub(1));
                     if self.terms.is_empty() {

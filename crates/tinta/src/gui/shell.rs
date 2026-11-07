@@ -235,6 +235,7 @@ impl Shell {
             Effect::Quit => w.quit(),
             Effect::Screenshot(path) => w.screenshot(&path),
             Effect::TermSpawn { id, cwd } => w.panel.spawn_terminal(self, id, &cwd),
+            Effect::TermAttach { id, master } => w.panel.attach_terminal(self, id, master),
             Effect::TermInput { id, text } => w.panel.paste_text(id, &text),
             Effect::TermCopy(id) => w.panel.copy(id),
             Effect::TermPaste(id) => w.panel.paste(id),

@@ -35,6 +35,10 @@ pub struct DebugPanel {
     pub selected: Option<String>,
     /// A build under way, and what to run when it succeeds.
     pub after_build: Option<(u64, Plan)>,
+    /// The terminal the program runs in, by its id in the panel.
+    pub tty: Option<(u64, dap::ProgramTty)>,
+    /// "Run to cursor" with nothing running: the place to go once the session first stops.
+    pub run_to_after_start: Option<(PathBuf, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +46,8 @@ pub enum DebugMsg {
     Incoming(u64, Incoming),
     Ready(Result<Plan, String>),
     ToggleRow(VarRow),
+    /// Asks for a new value for a line of the variables tree.
+    EditValue(VarRow),
     SelectFrame(usize),
     SelectThread(i64),
     Input(String),
@@ -151,13 +157,71 @@ impl App {
         self.debug.generation += 1;
         let generation = self.debug.generation;
         let sink: dap::Sink = Arc::new(move |m| bus::send(Message::Debug(DebugMsg::Incoming(generation, m))));
-        match Debugger::start(&plan, &self.debug.watches, sink) {
+        let tty = match plan.config.wants_terminal().then(dap::open_tty) {
+            Some(Ok(t)) => Some(t),
+            Some(Err(e)) => {
+                self.debug.print("stderr", &format!("{}: {e}\n", tr("No terminal for the program")));
+                None
+            }
+            None => None,
+        };
+        match Debugger::start(&plan, &self.debug.watches, sink, tty.as_ref().map(|t| t.path.as_path())) {
             Ok(s) => {
                 self.debug.session = Some(s);
-                self.panel = Some(PanelView::Debug);
-                Task::none()
+                match tty {
+                    Some(t) => self.program_terminal(t, &plan.config.name),
+                    None => {
+                        self.panel = Some(PanelView::Debug);
+                        Task::none()
+                    }
+                }
             }
             Err(e) => self.debug_problem(e),
+        }
+    }
+
+    /// The program's terminal in the panel, in place of the last run's.
+    fn program_terminal(&mut self, tty: dap::ProgramTty, name: &str) -> Task {
+        let mut tasks = Vec::new();
+        if let Some((old, _)) = self.debug.tty.take()
+            && let Some(i) = self.terms.iter().position(|t| t.id == old)
+        {
+            self.terms.remove(i);
+            tasks.push(Task::effect(fx::Effect::TermKill(old)));
+        }
+        let master = match tty.master.try_clone() {
+            Ok(m) => m,
+            Err(e) => {
+                self.debug.print("stderr", &format!("{}: {e}\n", tr("No terminal for the program")));
+                self.panel = Some(PanelView::Debug);
+                return Task::batch(tasks);
+            }
+        };
+        let id = self.new_id();
+        self.terms.push(super::TermInfo { id, title: format!("{}: {name}", tr("Program")) });
+        self.active_term = self.terms.len() - 1;
+        self.panel = Some(PanelView::Terminal);
+        self.debug.tty = Some((id, tty));
+        tasks.push(Task::effect(fx::Effect::TermAttach { id, master }));
+        Task::batch(tasks)
+    }
+
+    /// Ctrl+F10: on to the line with the cursor. With nothing running, a session starts and
+    /// goes there from the start of the program.
+    pub fn debug_run_to_cursor(&mut self) -> Task {
+        let Some((path, line)) = self.active_path_line() else { return self.toast(tr("Save the file first")) };
+        let debug = &mut self.debug;
+        match &mut debug.session {
+            Some(s) if s.is_stopped() => {
+                let list = debug.breakpoints.get(&path).cloned().unwrap_or_default();
+                s.run_to(&path, line, &list);
+                Task::none()
+            }
+            Some(s) if s.is_live() => self.toast(tr("Pause the program first")),
+            _ => {
+                self.debug.run_to_after_start = Some((path, line));
+                self.debug_start(true)
+            }
         }
     }
 
@@ -322,6 +386,15 @@ impl App {
                     s.toggle_row(&row);
                 }
             }
+            DebugMsg::EditValue(row) => {
+                if !self.debug.session.as_ref().is_some_and(|s| s.can_set(&row)) {
+                    return self.toast(tr("This debugger can't change this value"));
+                }
+                self.dialog_input = row.value.clone();
+                self.dialog = Some(DialogState::SetValue(row));
+                self.focus = Focus::Input;
+                return Task::batch([fx::focus(super::DIALOG_INPUT), fx::select_all(super::DIALOG_INPUT)]);
+            }
             DebugMsg::SelectFrame(i) => {
                 if let Some(s) = &mut self.debug.session {
                     let notices = s.select_frame(i);
@@ -394,7 +467,18 @@ impl App {
                 self.jump_to(line, column);
                 t
             }
-            Notice::Stopped | Notice::Continued => {
+            Notice::Stopped => {
+                self.hover = None;
+                if let Some((path, line)) = self.debug.run_to_after_start.take() {
+                    let debug = &mut self.debug;
+                    if let Some(s) = debug.session.as_mut().filter(|s| s.is_stopped()) {
+                        let list = debug.breakpoints.get(&path).cloned().unwrap_or_default();
+                        s.run_to(&path, line, &list);
+                    }
+                }
+                Task::none()
+            }
+            Notice::Continued => {
                 self.hover = None;
                 Task::none()
             }
@@ -405,10 +489,12 @@ impl App {
                 };
                 self.debug.print("console", &format!("{text}\n"));
                 self.debug.session = None;
+                self.debug.run_to_after_start = None;
                 self.toast(text)
             }
             Notice::Failed(message) => {
                 self.debug.session = None;
+                self.debug.run_to_after_start = None;
                 self.debug_problem(message)
             }
             Notice::Hover { expression, value, pos } => {

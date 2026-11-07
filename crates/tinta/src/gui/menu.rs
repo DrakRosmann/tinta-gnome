@@ -190,7 +190,7 @@ pub fn main_menu(app: &App) -> gio::Menu {
             km,
             &[
                 &[C::DebugStart, C::DebugStop, C::DebugRestart, C::DebugPause],
-                &[C::StepOver, C::StepInto, C::StepOut],
+                &[C::StepOver, C::StepInto, C::StepOut, C::RunToCursor],
                 &[C::ToggleBreakpoint, C::BreakpointCondition, C::RemoveBreakpoints],
                 &[C::ShowDebug, C::ShowDebugConsole, C::DebugSelectConfig, C::DebugConfigure],
             ],
@@ -209,7 +209,7 @@ pub fn editor_menu(app: &App) -> gio::Menu {
         &[
             &[C::GoToDefinition, C::FindReferences, C::Rename, C::CodeAction, C::FormatDocument],
             &[C::Cut, C::Copy, C::Paste],
-            &[C::ToggleBreakpoint, C::ToggleComment, C::AddNextOccurrence, C::SelectAllOccurrences],
+            &[C::ToggleBreakpoint, C::RunToCursor, C::ToggleComment, C::AddNextOccurrence, C::SelectAllOccurrences],
             &[C::CommandPalette],
         ],
     )

@@ -1634,6 +1634,7 @@ dependencies = [
  "dirs",
  "encoding_rs",
  "ignore",
+ "libc",
  "nucleo-matcher",
  "regex",
  "ropey",

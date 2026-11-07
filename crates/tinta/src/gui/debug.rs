@@ -5,6 +5,7 @@ use super::rows;
 use crate::app::{App, DEBUG_INPUT, DebugMsg, Message, WATCH_INPUT};
 use crate::i18n::tr;
 use adw::prelude::*;
+use gtk::{gio, glib};
 use std::cell::RefCell;
 use std::rc::Rc;
 use tinta_core::dap::{BpState, RunState, VarRow};
@@ -141,6 +142,34 @@ impl DebugSidebar {
             b.append(&x);
         }
         let row = gtk::ListBoxRow::builder().child(&b).activatable(r.expandable).build();
+        // A new value: double click on a plain value (a click opens the others), or the menu on
+        // a right click.
+        if !r.is_scope && !r.expandable {
+            let s = Rc::downgrade(shell);
+            let edit = r.clone();
+            let twice = gtk::GestureClick::new();
+            twice.connect_pressed(move |g, n, _, _| {
+                if n == 2
+                    && let Some(s) = s.upgrade()
+                {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                    s.dispatch(Message::Debug(DebugMsg::EditValue(edit.clone())));
+                }
+            });
+            row.add_controller(twice);
+        }
+        if !r.is_scope {
+            let s = Rc::downgrade(shell);
+            let edit = r.clone();
+            let menu_click = gtk::GestureClick::new();
+            menu_click.set_button(3);
+            menu_click.connect_pressed(move |g, _, x, y| {
+                if let (Some(s), Some(w)) = (s.upgrade(), g.widget()) {
+                    value_menu(&s, &edit, &w, x, y);
+                }
+            });
+            row.add_controller(menu_click);
+        }
         if r.expandable {
             let s = Rc::downgrade(shell);
             let click = gtk::GestureClick::new();
@@ -379,4 +408,30 @@ impl Console {
         self.view.scroll_mark_onscreen(&mark);
         buf.delete_mark(&mark);
     }
+}
+
+/// A right click on a variable: give it a new value.
+fn value_menu(shell: &Rc<Shell>, row: &VarRow, w: &gtk::Widget, x: f64, y: f64) {
+    let menu = gio::Menu::new();
+    let actions = gio::SimpleActionGroup::new();
+    let a = gio::SimpleAction::new("set", None);
+    let s = Rc::downgrade(shell);
+    let row = row.clone();
+    a.connect_activate(move |_, _| {
+        if let Some(s) = s.upgrade() {
+            s.dispatch(Message::Debug(DebugMsg::EditValue(row.clone())));
+        }
+    });
+    actions.add_action(&a);
+    menu.append(Some(tr("Change Value…")), Some("var.set"));
+    w.insert_action_group("var", Some(&actions));
+    let pop = gtk::PopoverMenu::from_model(Some(&menu));
+    pop.set_parent(w);
+    pop.set_has_arrow(false);
+    pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+    pop.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
+    pop.popup();
 }

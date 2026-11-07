@@ -101,6 +101,10 @@ pub struct LaunchConfig {
     pub stop_on_entry: bool,
     /// A shell command to run first, like `make`. The session starts only if it succeeds.
     pub build: Option<String>,
+    /// Where the program reads and writes, in VS Code's words: `integratedTerminal`, a terminal
+    /// of its own in the panel that you can type into, or `internalConsole`, the debug console,
+    /// with nothing to read from. Empty: the terminal where the debugger can do it.
+    pub console: String,
     /// Anything else goes to the adapter as it is.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -118,7 +122,8 @@ pub const LAUNCH_TEMPLATE: &str = r#"// How to debug this project. Press F5 to s
     "args": [],
     "cwd": "${workspaceFolder}",
     "env": {},
-    "stopOnEntry": false
+    "stopOnEntry": false,
+    "console": "integratedTerminal"
   }
 ]
 "#;
@@ -561,6 +566,54 @@ impl Drop for Client {
     }
 }
 
+impl LaunchConfig {
+    /// The program gets a terminal: what it prints goes there, and it reads what's typed in it.
+    /// Only gdb is given one, which it takes before the program starts; with the other
+    /// debuggers the program stays in the console.
+    pub fn wants_terminal(&self) -> bool {
+        self.console != "internalConsole" && self.kind == "gdb"
+    }
+}
+
+// The program's terminal ---------------------------------------------------------------------
+
+/// A pseudo-terminal for the program being debugged: the debugger connects the program to
+/// `path`, and the editor shows `master` in a terminal.
+pub struct ProgramTty {
+    pub master: std::os::fd::OwnedFd,
+    pub path: PathBuf,
+    /// Held open so the terminal doesn't see the end of its input before the program starts,
+    /// or between one run and the next.
+    _slave: std::os::fd::OwnedFd,
+}
+
+pub fn open_tty() -> std::io::Result<ProgramTty> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let err = std::io::Error::last_os_error;
+    // SAFETY: plain calls on a descriptor this function owns, with a buffer of the size given.
+    unsafe {
+        let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
+        if fd < 0 {
+            return Err(err());
+        }
+        let master = OwnedFd::from_raw_fd(fd);
+        if libc::grantpt(fd) != 0 || libc::unlockpt(fd) != 0 {
+            return Err(err());
+        }
+        let mut name = [0 as libc::c_char; 128];
+        if libc::ptsname_r(fd, name.as_mut_ptr(), name.len()) != 0 {
+            return Err(err());
+        }
+        let path = PathBuf::from(std::ffi::CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned());
+        let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).map_err(|_| std::io::Error::other("tty name"))?;
+        let slave = libc::open(c.as_ptr(), libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC);
+        if slave < 0 {
+            return Err(err());
+        }
+        Ok(ProgramTty { master, path, _slave: OwnedFd::from_raw_fd(slave) })
+    }
+}
+
 // The session --------------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -650,6 +703,8 @@ enum Pending {
     Scopes,
     Variables { path: String },
     Evaluate(EvalFor),
+    /// A new value for a variable or a watched expression.
+    SetValue,
     Quiet,
 }
 
@@ -695,6 +750,11 @@ pub struct Debugger {
     /// Anything that shows the program really is starting.
     program_seen: bool,
     pub start_limit: Duration,
+    /// The terminal the program runs in, given to gdb before the program starts.
+    tty: Option<PathBuf>,
+    /// "Run to cursor" put a breakpoint in this file for a while: the file's real ones go back
+    /// at the next stop.
+    run_to: Option<PathBuf>,
 }
 
 const MAX_ROWS: usize = 2000;
@@ -715,8 +775,32 @@ fn check_program(c: &LaunchConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// `setBreakpoints` for a file: the lines asked for, and the arguments. `extra` is one more line.
+fn breakpoint_args(path: &Path, list: &[Breakpoint], extra: Option<usize>) -> (Vec<usize>, Value) {
+    let active: Vec<&Breakpoint> = list.iter().filter(|b| b.enabled).collect();
+    let lines: Vec<usize> = active.iter().map(|b| b.line).collect();
+    let mut bps: Vec<Value> = active
+        .iter()
+        .map(|b| {
+            let mut o = json!({ "line": b.line + 1 });
+            if let Some(c) = b.condition.as_deref().filter(|c| !c.trim().is_empty()) {
+                o["condition"] = json!(c);
+            }
+            o
+        })
+        .collect();
+    if let Some(l) = extra.filter(|l| !lines.contains(l)) {
+        bps.push(json!({ "line": l + 1 }));
+    }
+    let args = json!({
+        "source": { "path": path, "name": path.file_name().map(|n| n.to_string_lossy().into_owned()) },
+        "breakpoints": bps,
+    });
+    (lines, args)
+}
+
 impl Debugger {
-    pub fn start(plan: &Plan, watches: &[String], sink: Sink) -> Result<Self, String> {
+    pub fn start(plan: &Plan, watches: &[String], sink: Sink, tty: Option<&Path>) -> Result<Self, String> {
         let adapter = resolve_adapter(&plan.config.kind)?;
         check_program(&plan.config)?;
         let cwd = Path::new(&plan.config.cwd);
@@ -751,6 +835,8 @@ impl Debugger {
             launch_last,
             program_seen: false,
             start_limit: if launch_last { START_LIMIT_LAUNCH_LAST } else { START_LIMIT },
+            tty: tty.filter(|_| adapter.kind == "gdb").map(Path::to_path_buf),
+            run_to: None,
         };
         let args = json!({
             "clientID": "tinta",
@@ -809,23 +895,56 @@ impl Debugger {
     // Requests from the user --------------------------------------------------------------------
 
     pub fn send_breakpoints(&mut self, path: &Path, list: &[Breakpoint]) {
-        let active: Vec<&Breakpoint> = list.iter().filter(|b| b.enabled).collect();
-        let lines = active.iter().map(|b| b.line).collect();
-        let bps: Vec<Value> = active
-            .iter()
-            .map(|b| {
-                let mut o = json!({ "line": b.line + 1 });
-                if let Some(c) = b.condition.as_deref().filter(|c| !c.trim().is_empty()) {
-                    o["condition"] = json!(c);
-                }
-                o
-            })
-            .collect();
-        let args = json!({
-            "source": { "path": path, "name": path.file_name().map(|n| n.to_string_lossy().into_owned()) },
-            "breakpoints": bps,
-        });
+        let (lines, args) = breakpoint_args(path, list, None);
         self.send(Pending::SetBreakpoints { path: path.to_path_buf(), lines }, "setBreakpoints", args);
+    }
+
+    /// Runs on until `line`, through a breakpoint there that lasts until the next stop. `list`
+    /// is the file's own breakpoints, which keep working on the way.
+    pub fn run_to(&mut self, path: &Path, line: usize, list: &[Breakpoint]) {
+        if !self.is_stopped() {
+            return;
+        }
+        let (_, args) = breakpoint_args(path, list, Some(line));
+        self.send(Pending::Quiet, "setBreakpoints", args);
+        self.run_to = Some(path.to_path_buf());
+        self.continue_();
+    }
+
+    /// Whether a line of the variables tree can take a new value: a variable or a watched
+    /// expression, while paused, with a debugger that can do it.
+    pub fn can_set(&self, row: &VarRow) -> bool {
+        if !self.is_stopped() || row.is_scope {
+            return false;
+        }
+        let watch = row.depth == 0 && row.path.starts_with("\u{1}watch/");
+        let cap = if watch { "supportsSetExpression" } else { "supportsSetVariable" };
+        self.capabilities[cap].as_bool().unwrap_or(false)
+    }
+
+    /// A new value for a line of the tree. The tree is read again once the debugger has it.
+    pub fn set_value(&mut self, row: &VarRow, value: &str) {
+        if !self.can_set(row) {
+            return;
+        }
+        if row.depth == 0 && row.path.starts_with("\u{1}watch/") {
+            let mut args = json!({ "expression": row.name, "value": value });
+            if let Some(id) = self.current_frame_id() {
+                args["frameId"] = json!(id);
+            }
+            self.send(Pending::SetValue, "setExpression", args);
+            return;
+        }
+        let Some(parent) = row.path.rsplit_once('/').and_then(|(p, _)| self.reference_for(p)) else { return };
+        self.send(Pending::SetValue, "setVariable", json!({ "variablesReference": parent, "name": row.name, "value": value }));
+    }
+
+    /// The file's real breakpoints again, after "run to cursor" borrowed it.
+    fn end_run_to(&mut self, bps: &Breakpoints) {
+        if let Some(path) = self.run_to.take() {
+            let list = bps.get(&path).cloned().unwrap_or_default();
+            self.send_breakpoints(&path, &list);
+        }
     }
 
     fn resume(&mut self, command: &str) {
@@ -1078,6 +1197,7 @@ impl Debugger {
                 let description = body["description"].as_str().or(body["text"].as_str()).map(str::to_string);
                 self.state = RunState::Stopped { reason, description };
                 self.clear_stop();
+                self.end_run_to(bps);
                 if let Some(t) = body["threadId"].as_i64() {
                     self.thread = Some(t);
                 }
@@ -1161,6 +1281,10 @@ impl Debugger {
                     return vec![Notice::Failed(message)];
                 }
                 self.capabilities = body.clone();
+                if let Some(tty) = self.tty.clone() {
+                    let cmd = format!("set inferior-tty {}", tty.display());
+                    self.send(Pending::Quiet, "evaluate", json!({ "expression": cmd, "context": "repl" }));
+                }
                 if !self.launch_last {
                     let args = self.launch.clone();
                     // Some adapters answer this only after configurationDone, so nothing waits on it.
@@ -1267,6 +1391,16 @@ impl Debugger {
                 Vec::new()
             }
             Pending::Evaluate(why) => self.on_evaluate(ok, &message, body, why),
+            Pending::SetValue => {
+                if !ok {
+                    return vec![Notice::Output { category: "stderr".into(), text: format!("{message}\n") }];
+                }
+                // Other variables may hang on this one: all of them are read again.
+                if self.is_stopped() {
+                    self.refresh_frame();
+                }
+                Vec::new()
+            }
             Pending::Quiet => {
                 // Stepping failing leaves everything where it was.
                 if !ok && !message.is_empty() && m["command"] != "disconnect" {
@@ -1589,7 +1723,7 @@ int main(void) {
             let sink: Sink = Arc::new(move |m| {
                 let _ = tx.lock().unwrap().send(m);
             });
-            Self { d: Debugger::start(plan, &[], sink).unwrap(), rx, bps, notices: Vec::new() }
+            Self { d: Debugger::start(plan, &[], sink, None).unwrap(), rx, bps, notices: Vec::new() }
         }
 
         /// Pumps messages until the condition holds, and then until things go quiet, so the
@@ -1744,6 +1878,78 @@ int main(void) {
     }
 
     #[test]
+    fn input_new_values_and_running_to_a_line() {
+        let Some((_, plan)) = c_program() else { return };
+        let dir = plan.root.clone();
+        let src = dir.join("le.c");
+        std::fs::write(
+            &src,
+            "#include <stdio.h>\nint main(void) {\n    int n = 0;\n    if (scanf(\"%d\", &n) != 1) return 1;\n    int dobro = n * 2;\n    for (int i = 0; i < 3; i++) {\n        dobro += 1;\n    }\n    printf(\"resultado %d\\n\", dobro);\n    return 0;\n}\n",
+        )
+        .unwrap();
+        let exe = dir.join("le");
+        assert!(Command::new("cc").args(["-g", "-O0"]).arg(&src).arg("-o").arg(&exe).status().unwrap().success());
+        let mut plan = plan;
+        plan.config.program = exe.to_string_lossy().into_owned();
+        assert!(plan.config.wants_terminal());
+
+        // The program's terminal: what's typed reaches the program, and what it prints comes back.
+        let tty = open_tty().unwrap();
+        let mut typed = std::fs::File::from(tty.master.try_clone().unwrap());
+        let shown = Arc::new(Mutex::new(String::new()));
+        {
+            let mut out = std::fs::File::from(tty.master.try_clone().unwrap());
+            let shown = shown.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 512];
+                while let Ok(n) = out.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    shown.lock().unwrap().push_str(&String::from_utf8_lossy(&buf[..n]));
+                }
+            });
+        }
+        let (tx, rx) = channel();
+        let tx = Mutex::new(tx);
+        let sink: Sink = Arc::new(move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        });
+        let mut bps = Breakpoints::new();
+        bps.insert(src.clone(), vec![Breakpoint::at(4)]);
+        let mut r = Rig { d: Debugger::start(&plan, &[], sink, Some(&tty.path)).unwrap(), rx, bps, notices: Vec::new() };
+        typed.write_all(b"21\n").unwrap();
+        r.until("after scanf", |r| r.stopped_with_vars() && r.line() == 4);
+        assert_eq!(r.var("Locals/n").as_deref(), Some("21"), "read from the terminal");
+
+        // A new value, which the program then goes on with.
+        let n = r.d.variable_rows().into_iter().find(|v| v.path == "Locals/n").unwrap();
+        assert!(r.d.can_set(&n));
+        r.d.set_value(&n, "50");
+        r.until("new value", |r| r.var("Locals/n").as_deref() == Some("50"));
+        let scope = r.d.variable_rows().into_iter().find(|v| v.is_scope).unwrap();
+        assert!(!r.d.can_set(&scope));
+
+        // Run to a line inside the loop: it stops there once, and the file's breakpoints are its
+        // own again afterwards, so the loop doesn't stop there on the next turns.
+        let list = r.bps[&src].clone();
+        r.d.run_to(&src, 6, &list);
+        r.until("run to cursor", |r| r.stopped_with_vars() && r.line() == 6);
+        assert_eq!(r.var("Locals/dobro").as_deref(), Some("100"));
+        assert_eq!(r.bps[&src].iter().map(|b| b.line).collect::<Vec<_>>(), vec![4]);
+        r.d.continue_();
+        r.until("the end", |r| !r.d.is_live());
+        let end = Instant::now() + Duration::from_secs(5);
+        while !shown.lock().unwrap().contains("resultado 103") && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let shown = shown.lock().unwrap().clone();
+        assert!(shown.contains("resultado 103"), "the terminal showed: {shown:?}");
+        let console: String = r.notices.iter().filter_map(|n| if let Notice::Output { text, .. } = n { Some(text.as_str()) } else { None }).collect();
+        assert!(!console.contains("resultado"), "the output went to the terminal, not the console: {console}");
+    }
+
+    #[test]
     fn conditions_and_disabled_breakpoints() {
         let Some((src, plan)) = c_program() else { return };
         let dir = plan.root.clone();
@@ -1873,7 +2079,7 @@ int main(void) {
             return;
         }
         let dir = tempfile();
-        let start = |p: &Path| Debugger::start(&plan_for(p, &dir), &[], Arc::new(|_| {})).err().unwrap_or_default();
+        let start = |p: &Path| Debugger::start(&plan_for(p, &dir), &[], Arc::new(|_| {}), None).err().unwrap_or_default();
         let missing = dir.join("nada");
         assert!(start(&missing).contains("program not found") && start(&missing).contains("nada"), "{}", start(&missing));
         // Gdb up to 17 answers "success" to these and then does nothing at all.
