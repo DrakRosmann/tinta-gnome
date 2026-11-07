@@ -16,6 +16,12 @@ pub type Target = (PathBuf, Option<(usize, usize)>);
 
 fn main() -> gtk::glib::ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    // Answered here, before GTK: a running editor would print them in its own terminal.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(text) = parse_args(&args) {
+        println!("{text}");
+        return gtk::glib::ExitCode::SUCCESS;
+    }
     gui::run()
 }
 

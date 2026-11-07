@@ -619,7 +619,7 @@ pub struct Watch {
 }
 
 /// One line of the variables tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VarRow {
     pub depth: usize,
     /// Stays the same from one stop to the next, unlike the debugger's references.
