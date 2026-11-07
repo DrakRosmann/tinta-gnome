@@ -900,6 +900,29 @@ fn hot_exit_brings_unsaved_text_back() {
     assert_eq!(std::fs::read_to_string(&p).unwrap(), SOURCE);
 }
 
+#[test]
+fn unsaved_untitled_text_comes_back_with_its_caret_where_it_was() {
+    let mut ui = Ui::new(Vec::new());
+    ui.app.settings.restore_session = true;
+    ui.cmd(Command::NewFile);
+    ui.typed("fn main(){\n");
+    ui.typed("p\n");
+    let head = ui.head();
+    ui.app.write_backups(false);
+    crate::app::save_session(&ui.app);
+    let text = ui.text();
+    let guard = ui.close();
+    let flags = Flags { targets: Vec::new(), new_session: false, dark: true, system_mono: None, font_names: Vec::new() };
+    let (mut app, _) = App::new(flags);
+    // The first update used to move the caret again by the restored text's length, past its
+    // end, and the editor crashed on opening.
+    let _ = app.update(Message::TickFrame);
+    drop(guard);
+    let (t, e) = app.active().expect("the tab came back");
+    assert_eq!(e.doc.rope.to_string(), text);
+    assert_eq!(e.doc.line_col(t.cursors.head()), head);
+}
+
 /// Not an assertion so much as a measurement: `cargo test --release large_file -- --ignored --nocapture`.
 #[test]
 #[ignore]

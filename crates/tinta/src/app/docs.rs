@@ -574,6 +574,9 @@ impl App {
                     if let Some(text) = &backup {
                         let mut c = Cursors::default();
                         doc.replace_all(text, &mut c);
+                        // The tab's carets are saved for this text: the edit that put it there
+                        // isn't news to them, or they'd be moved again by its length.
+                        let _ = doc.take_log();
                     }
                     let id = self.make_entry(doc);
                     self.watch_parent(p);
@@ -593,6 +596,7 @@ impl App {
                 }
                 let mut c = Cursors::default();
                 doc.replace_all(text, &mut c);
+                let _ = doc.take_log();
                 self.make_entry(doc)
             }),
         };
