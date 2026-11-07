@@ -4,6 +4,7 @@
 use super::Shell;
 use crate::app::{App, Focus, Message};
 use crate::gfx::{self, Color, Event, Modifiers, Painter, Point, Rectangle, Size, TextCache, mouse};
+use tinta_core::commands;
 use crate::state::{TabId, TabKind};
 use crate::ui::diff_view::{self, DiffEvent, DiffView};
 use crate::ui::editor_view::{self, EditorEvent, EditorView, Palette};
@@ -31,6 +32,13 @@ mod imp {
         /// happens on compositors without one: ´ and a still make á.
         pub compose: RefCell<Option<gtk::IMContextSimple>>,
         pub composing: Cell<bool>,
+        /// What the screen reader was last told: the text's revision and length, the caret,
+        /// and the selection.
+        pub a11y: Cell<Option<(u64, usize, usize, (usize, usize))>>,
+        /// The text as the screen reader last knew it. While it's told of a removal, this is what
+        /// it reads, since it asks for the text that went away.
+        pub a11y_text: RefCell<Option<ropey::Rope>>,
+        pub a11y_removing: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -38,9 +46,106 @@ mod imp {
         const NAME: &'static str = "TintaEditor";
         type Type = super::Editor;
         type ParentType = gtk::Widget;
+        type Interfaces = (gtk::AccessibleText,);
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.set_accessible_role(gtk::AccessibleRole::TextBox);
+        }
     }
 
     impl ObjectImpl for Editor {}
+
+    /// What a screen reader reads: the document, by character offsets, which are the rope's.
+    impl AccessibleTextImpl for Editor {
+        fn contents(&self, start: u32, end: u32) -> Option<glib::Bytes> {
+            if self.a11y_removing.get()
+                && let Some(old) = self.a11y_text.borrow().as_ref()
+            {
+                let len = old.len_chars();
+                let (a, b) = ((start as usize).min(len), (end as usize).min(len));
+                return Some(glib::Bytes::from_owned(old.slice(a..b.max(a)).to_string().into_bytes()));
+            }
+            self.obj().with_text(|_, _, doc| {
+                let len = doc.len_chars();
+                let (a, b) = ((start as usize).min(len), (end as usize).min(len));
+                glib::Bytes::from_owned(doc.slice_string(a, b.max(a)).into_bytes())
+            })
+        }
+
+        fn contents_at(&self, offset: u32, granularity: gtk::AccessibleTextGranularity) -> Option<(u32, u32, glib::Bytes)> {
+            self.obj().with_text(|_, _, doc| {
+                let len = doc.len_chars();
+                let pos = (offset as usize).min(len);
+                let (a, b) = match granularity {
+                    gtk::AccessibleTextGranularity::Character => (pos, (pos + 1).min(len)),
+                    gtk::AccessibleTextGranularity::Word => {
+                        let (a, b) = commands::word_at(doc, pos);
+                        if a < b { (a, b) } else { (pos, (pos + 1).min(len)) }
+                    }
+                    // A line of code is its sentence and its paragraph.
+                    _ => {
+                        let line = doc.char_to_line(pos);
+                        let a = doc.rope.line_to_char(line);
+                        let b = if line + 1 < doc.len_lines() { doc.rope.line_to_char(line + 1) } else { len };
+                        (a, b)
+                    }
+                };
+                (a as u32, b as u32, glib::Bytes::from_owned(doc.slice_string(a, b).into_bytes()))
+            })
+        }
+
+        fn caret_position(&self) -> u32 {
+            self.obj().with_text(|_, t, _| t.cursors.head() as u32).unwrap_or(0)
+        }
+
+        fn selection(&self) -> Vec<gtk::AccessibleTextRange> {
+            self.obj()
+                .with_text(|_, t, _| {
+                    t.cursors.iter().filter(|s| !s.is_empty()).map(|s| gtk::AccessibleTextRange::new(s.start(), s.end() - s.start())).collect()
+                })
+                .unwrap_or_default()
+        }
+
+        fn attributes(&self, _offset: u32) -> Vec<(gtk::AccessibleTextRange, glib::GString, glib::GString)> {
+            Vec::new()
+        }
+
+        fn default_attributes(&self) -> Vec<(glib::GString, glib::GString)> {
+            Vec::new()
+        }
+
+        /// Where a range is on screen, for magnifiers and for following the caret.
+        fn extents(&self, start: u32, end: u32) -> Option<gtk::graphene::Rect> {
+            let obj = self.obj();
+            obj.with_text(|app, t, doc| {
+                let g = editor_view::Geometry::new(doc.len_lines(), t.view_w, &app.metrics, &app.settings);
+                let m = &app.metrics;
+                let at = |pos: usize| {
+                    let (row, vcol) = t.map.pos_to_row(doc, pos.min(doc.len_chars()));
+                    (g.text_x + vcol as f32 * m.cell_w - t.scroll_x, row as f32 * m.line_h - t.scroll_y)
+                };
+                let (x0, y0) = at(start as usize);
+                let (x1, y1) = at((end as usize).max(start as usize));
+                if y1 > y0 {
+                    // Over several lines: from the first line's start to the last's end.
+                    gtk::graphene::Rect::new(g.text_x, y0, (t.view_w - g.text_x).max(1.0), y1 - y0 + m.line_h)
+                } else {
+                    gtk::graphene::Rect::new(x0, y0, (x1 - x0).max(m.cell_w), m.line_h)
+                }
+            })
+        }
+
+        fn offset(&self, point: &gtk::graphene::Point) -> Option<u32> {
+            self.obj().with_text(|app, t, doc| {
+                let g = editor_view::Geometry::new(doc.len_lines(), t.view_w, &app.metrics, &app.settings);
+                let m = &app.metrics;
+                let row = ((point.y() + t.scroll_y) / m.line_h).max(0.0) as usize;
+                let row = row.min(t.map.row_count(doc).saturating_sub(1));
+                let vcol = ((point.x() - g.text_x + t.scroll_x) / m.cell_w).max(0.0) as usize;
+                t.map.row_to_pos(doc, row, vcol) as u32
+            })
+        }
+    }
 
     impl WidgetImpl for Editor {
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
@@ -58,7 +163,7 @@ mod imp {
 glib::wrapper! {
     pub struct Editor(ObjectSubclass<imp::Editor>)
         @extends gtk::Widget,
-        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+        @implements gtk::Accessible, gtk::AccessibleText, gtk::Buildable, gtk::ConstraintTarget;
 }
 
 /// The colors of the text area, from libadwaita: the view's background, the accent the user
@@ -87,6 +192,60 @@ fn button_of(n: u32) -> mouse::Button {
 }
 
 impl Editor {
+    /// The tab and its text, for the screen reader. `None` for a diff, or while the app is busy.
+    fn with_text<R>(&self, f: impl FnOnce(&App, &crate::state::Tab, &tinta_core::Document) -> R) -> Option<R> {
+        let shell = self.shell()?;
+        let app = shell.app.try_borrow().ok()?;
+        let t = app.tabs.get(&self.tab())?;
+        if t.kind == TabKind::Diff {
+            return None;
+        }
+        let e = app.docs.get(&t.doc)?;
+        Some(f(&app, t, &e.doc))
+    }
+
+    /// Tells the screen reader what changed since it last heard: text typed or removed, the
+    /// caret moving, the selection. Called after each update of the app.
+    pub fn sync_accessible(&self) {
+        let Some((now, name, readonly, rope)) = self.with_text(|_, t, doc| {
+            let p = t.cursors.primary();
+            ((doc.revision, doc.len_chars(), t.cursors.head(), (p.start(), p.end())), doc.file_name(), doc.readonly, doc.rope.clone())
+        }) else {
+            return;
+        };
+        let imp = self.imp();
+        let before = imp.a11y.replace(Some(now));
+        let old_text = imp.a11y_text.replace(Some(rope));
+        let Some((rev, len, head, sel)) = before else {
+            self.update_property(&[gtk::accessible::Property::Label(&name), gtk::accessible::Property::MultiLine(true), gtk::accessible::Property::ReadOnly(readonly)]);
+            return;
+        };
+        if rev != now.0 {
+            self.update_property(&[gtk::accessible::Property::Label(&name), gtk::accessible::Property::ReadOnly(readonly)]);
+            // Typing leaves the caret after what came in; deleting, where it went from.
+            let (new_len, caret) = (now.1, now.2);
+            if new_len > len {
+                let n = new_len - len;
+                let start = caret.saturating_sub(n);
+                self.update_contents(gtk::AccessibleTextContentChange::Insert, start as u32, (start + n) as u32);
+            } else if new_len < len {
+                // It reads what was removed from the text as it was.
+                imp.a11y_text.replace(old_text);
+                imp.a11y_removing.set(true);
+                self.update_contents(gtk::AccessibleTextContentChange::Remove, caret as u32, (caret + len - new_len) as u32);
+                imp.a11y_removing.set(false);
+                let rope = self.with_text(|_, _, doc| doc.rope.clone());
+                imp.a11y_text.replace(rope);
+            }
+        }
+        if head != now.2 {
+            self.update_caret_position();
+        }
+        if sel != now.3 {
+            self.update_selection_bound();
+        }
+    }
+
     pub fn new(shell: &Rc<Shell>, tab: TabId) -> Self {
         let w: Self = glib::Object::builder().build();
         let imp = w.imp();

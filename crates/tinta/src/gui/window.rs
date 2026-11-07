@@ -538,6 +538,7 @@ impl Window {
         for g in self.groups.borrow().iter() {
             if let Some(tab) = g.view.selected_page().and_then(|p| g.pages.borrow().iter().find(|(_, pg, ..)| *pg == p).map(|(.., e)| e.clone())) {
                 tab.queue_draw();
+                tab.sync_accessible();
             }
         }
         self.sidebar.sync(shell, &app);

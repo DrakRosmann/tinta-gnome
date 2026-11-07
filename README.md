@@ -30,7 +30,9 @@ e a interface foi reescrita com os componentes do GNOME.
 
 O texto é um widget próprio desenhado com o GSK, e não o `GtkSourceView`: é o que mantém os
 recursos do editor, como múltiplos cursores, seleção em coluna, dobras pela árvore de sintaxe,
-minimapa, modo Vim e a margem de breakpoints.
+minimapa, modo Vim e a margem de breakpoints. Para o leitor de tela (Orca) ele é uma caixa de texto
+de verdade, pelo `GtkAccessibleText`: lê o conteúdo por caractere, palavra e linha, segue o cursor e
+a seleção, ouve o que se digita e apaga, e sabe onde cada trecho está na tela.
 
 Ele roda em qualquer ambiente com GTK 4. No COSMIC, por exemplo, segue o tema que o COSMIC passa
 para os aplicativos GTK.
@@ -347,6 +349,9 @@ tests/e2e/gnome.sh /tmp/passos.txt color-scheme=prefer-dark
 ```
 
 Os passos estão descritos em [`script.rs`](crates/tinta/src/app/script.rs).
+
+`tests/e2e/a11y.sh` lê o editor como o Orca, pelo AT-SPI, num D-Bus e numa pasta de execução
+próprios: confere o papel, o texto e os eventos de cursor, inserção e remoção.
 
 Teclado e ponteiro de verdade precisam de um compositor que aceite os dois: `tests/e2e/run.sh`
 digita pelo teclado virtual do Wayland (`tinta-vkbd`), com teclas mortas e tudo, num `cosmic-comp`
