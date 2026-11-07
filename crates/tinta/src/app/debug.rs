@@ -292,7 +292,9 @@ impl App {
 
     /// The value under the pointer, while stopped. True if the debugger was asked.
     pub fn debug_hover(&mut self, line_text: &str, col: usize, pos: usize) -> bool {
-        let Some(s) = self.debug.session.as_mut().filter(|s| s.is_stopped()) else { return false };
+        // Right after a step the new stack may not be in yet: asked without a frame, the
+        // debugger looks in the wrong place.
+        let Some(s) = self.debug.session.as_mut().filter(|s| s.is_stopped() && s.current_frame_id().is_some()) else { return false };
         match dap::hover_expression(line_text, col) {
             Some(expr) => {
                 s.hover(&expr, pos);

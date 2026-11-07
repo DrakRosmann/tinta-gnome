@@ -109,8 +109,13 @@ impl Editor {
             }
             w.imp().pointer.set(Some((x as f32, y as f32)));
             w.set_mods(g.current_event_state());
-            if w.deliver(Event::Mouse(mouse::Event::ButtonPressed(button_of(g.current_button())))) {
+            let button = g.current_button();
+            if w.deliver(Event::Mouse(mouse::Event::ButtonPressed(button_of(button)))) {
                 g.set_state(gtk::EventSequenceState::Claimed);
+            }
+            // The text's own menu, where the click was.
+            if button == 3 && !w.is_diff() {
+                w.context_menu(x, y);
             }
         });
         let me = w.downgrade();
@@ -161,9 +166,6 @@ impl Editor {
         im.set_client_widget(Some(&w));
         let me = w.downgrade();
         im.connect_commit(move |_, text| {
-            if std::env::var_os("TINTA_DEBUG_IM").is_some() {
-                eprintln!("im: commit {text:?}");
-            }
             if let Some(w) = me.upgrade() {
                 w.deliver(Event::InputMethod(gfx::input_method::Event::Commit(text.to_string())));
             }
@@ -215,6 +217,21 @@ impl Editor {
         simple.focus_in();
         *imp.compose.borrow_mut() = Some(simple);
         w
+    }
+
+    fn context_menu(&self, x: f64, y: f64) {
+        let Some(shell) = self.shell() else { return };
+        let menu = super::menu::editor_menu(&shell.app.borrow());
+        let pop = gtk::PopoverMenu::from_model(Some(&menu));
+        pop.set_parent(self);
+        pop.set_has_arrow(false);
+        pop.set_halign(gtk::Align::Start);
+        pop.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        pop.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        pop.popup();
     }
 
     pub fn tab(&self) -> TabId {

@@ -206,11 +206,7 @@ impl Window {
                 let vim_cmd = { let a = s.app.borrow(); a.settings.vim_mode && !a.vim.is_insert() };
                 let plain = !state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK);
                 if !vim_cmd && plain && let Some(ev) = c.current_event() {
-                    let took = ed.filter_key(&ev);
-                    if std::env::var_os("TINTA_DEBUG_IM").is_some() {
-                        eprintln!("im: key {:?} took={took}", keyval.name());
-                    }
-                    if took {
+                    if ed.filter_key(&ev) {
                         return glib::Propagation::Stop;
                     }
                 }

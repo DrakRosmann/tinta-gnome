@@ -18,6 +18,8 @@ mod window;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
+pub use editor::editor_view_for;
+pub use sidebar::current_symbols;
 pub use shell::Shell;
 
 pub fn run() -> glib::ExitCode {

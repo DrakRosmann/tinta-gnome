@@ -8,6 +8,8 @@ mod gui;
 mod i18n;
 mod state;
 mod ui;
+#[cfg(test)]
+mod ui_tests;
 
 use std::path::PathBuf;
 
