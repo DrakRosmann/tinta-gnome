@@ -56,6 +56,12 @@ pub struct Window {
     fields: RefCell<HashMap<&'static str, gtk::Widget>>,
     allow_close: Cell<bool>,
     last: RefCell<Last>,
+    /// The dividers between splits, left to right.
+    panes: RefCell<Vec<gtk::Paned>>,
+    panes_syncing: Rc<Cell<bool>>,
+    weights: RefCell<Vec<f32>>,
+    /// A page on its way from one split's tab bar to another's.
+    pub in_transit: RefCell<Option<(TabId, adw::TabPage, gtk::Overlay, Editor)>>,
 }
 
 #[derive(Default)]
@@ -176,6 +182,10 @@ impl Window {
             fields: RefCell::new(HashMap::new()),
             allow_close: Cell::new(false),
             last: RefCell::new(Last::default()),
+            panes: RefCell::new(Vec::new()),
+            panes_syncing: Rc::new(Cell::new(false)),
+            weights: RefCell::new(Vec::new()),
+            in_transit: RefCell::new(None),
         };
         w.connect(shell);
         for (id, f) in w.sidebar.fields().into_iter().chain(w.panel.debug.fields()) {
@@ -192,6 +202,25 @@ impl Window {
 
     fn connect(&self, shell: &Rc<Shell>) {
         // Keys go to the app first; what it doesn't want goes on to the focused widget.
+        // Accents in text fields, for sessions with no input method to compose them (the editor
+        // has its own): ´ then a still makes á in the find bar or the palette.
+        let compose = gtk::IMContextSimple::new();
+        compose.set_client_widget(Some(&self.window));
+        let composing = Rc::new(Cell::new(false));
+        {
+            let win = self.window.clone();
+            let composing = composing.clone();
+            compose.connect_commit(move |_, text| {
+                composing.set(false);
+                let focus = gtk::prelude::GtkWindowExt::focus(&win);
+                if let Some(e) = focus.and_then(|f| f.dynamic_cast::<gtk::Editable>().ok()) {
+                    e.delete_selection();
+                    let mut pos = e.position();
+                    e.insert_text(text, &mut pos);
+                    e.set_position(pos);
+                }
+            });
+        }
         let keyc = gtk::EventControllerKey::new();
         keyc.set_propagation_phase(gtk::PropagationPhase::Capture);
         let s = Rc::downgrade(shell);
@@ -211,8 +240,17 @@ impl Window {
                     }
                 }
             }
-            if in_field && keys::is_dead(keyval) {
-                return glib::Propagation::Proceed;
+            if in_field && (composing.get() || keys::is_dead(keyval)) && let Some(ev) = c.current_event() {
+                let was = composing.get();
+                if compose.filter_keypress(&ev) {
+                    if !was {
+                        composing.set(true);
+                    } else if compose.preedit_string().0.is_empty() {
+                        composing.set(false);
+                    }
+                    return glib::Propagation::Stop;
+                }
+                composing.set(false);
             }
             let Some(mut ev) = keys::key_event(&WidgetExt::display(&win), keyval, keycode, state) else { return glib::Propagation::Proceed };
             ev.captured = in_field;
@@ -450,15 +488,64 @@ impl Window {
             changed = true;
         }
         if changed {
+            // Splits sit in a chain of dividers: each holds one split and the rest to its right.
+            for p in self.panes.borrow().iter() {
+                p.set_start_child(gtk::Widget::NONE);
+                p.set_end_child(gtk::Widget::NONE);
+            }
             while let Some(c) = self.groups_box.first_child() {
                 self.groups_box.remove(&c);
             }
-            for (i, g) in groups.iter().enumerate() {
-                if i > 0 {
-                    self.groups_box.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-                }
-                self.groups_box.append(&g.root);
+            let mut panes = Vec::new();
+            let mut tail: gtk::Widget = groups.last().expect("a group").root.clone().upcast();
+            for g in groups.iter().rev().skip(1) {
+                let p = gtk::Paned::new(gtk::Orientation::Horizontal);
+                p.set_start_child(Some(&g.root));
+                p.set_end_child(Some(&tail));
+                p.set_shrink_start_child(false);
+                p.set_shrink_end_child(false);
+                p.set_hexpand(true);
+                let s = Rc::downgrade(shell);
+                let syncing = self.panes_syncing.clone();
+                p.connect_position_notify(move |_| {
+                    if syncing.get() {
+                        return;
+                    }
+                    if let Some(s) = s.upgrade()
+                        && let Some(w) = s.window.get()
+                    {
+                        let widths: Vec<f32> = w.groups.borrow().iter().map(|g| g.root.width().max(1) as f32).collect();
+                        let total: f32 = widths.iter().sum();
+                        let weights: Vec<f32> = widths.iter().map(|x| x / total * widths.len() as f32).collect();
+                        *w.weights.borrow_mut() = weights.clone();
+                        s.dispatch(Message::GroupWeights(weights));
+                    }
+                });
+                tail = p.clone().upcast();
+                panes.push(p);
             }
+            panes.reverse();
+            self.groups_box.append(&tail);
+            *self.panes.borrow_mut() = panes;
+            self.weights.borrow_mut().clear();
+        }
+        // Widths from the weights the app keeps, once the dividers know how wide they are.
+        let weights: Vec<f32> = app.groups.iter().map(|g| g.weight).collect();
+        if weights.len() > 1 && *self.weights.borrow() != weights {
+            *self.weights.borrow_mut() = weights.clone();
+            let panes = self.panes.borrow().clone();
+            let syncing = self.panes_syncing.clone();
+            glib::idle_add_local_once(move || {
+                syncing.set(true);
+                for (i, p) in panes.iter().enumerate() {
+                    let rest: f32 = weights[i..].iter().sum();
+                    let w = p.width();
+                    if w > 0 && rest > 0.0 {
+                        p.set_position((w as f32 * weights[i] / rest) as i32);
+                    }
+                }
+                syncing.set(false);
+            });
         }
         let any_tab = app.groups.iter().any(|g| !g.model.is_empty());
         if !any_tab && groups.len() <= 1 {
@@ -553,6 +640,41 @@ impl GroupView {
             let id = me.pages.borrow().iter().find(|(_, p, ..)| p == page).map(|(id, ..)| *id);
             if let Some(id) = id {
                 s.dispatch(Message::TabMoved(index, id, pos as usize));
+            }
+        });
+        // A tab dragged out of this split's bar, and one dropped onto it.
+        let s = Rc::downgrade(shell);
+        let me = Rc::downgrade(&g);
+        g.view.connect_page_detached(move |_, page, _| {
+            let (Some(s), Some(me)) = (s.upgrade(), me.upgrade()) else { return };
+            if me.syncing.get() {
+                return;
+            }
+            let i = me.pages.borrow().iter().position(|(_, p, ..)| p == page);
+            if let (Some(i), Some(w)) = (i, s.window.get()) {
+                let entry = me.pages.borrow_mut().remove(i);
+                *w.in_transit.borrow_mut() = Some(entry);
+            }
+        });
+        let s = Rc::downgrade(shell);
+        let me = Rc::downgrade(&g);
+        g.view.connect_page_attached(move |_, page, pos| {
+            let (Some(s), Some(me)) = (s.upgrade(), me.upgrade()) else { return };
+            if me.syncing.get() {
+                return;
+            }
+            let Some(w) = s.window.get() else { return };
+            let entry = w.in_transit.borrow_mut().take();
+            if let Some(entry) = entry.filter(|(_, p, ..)| p == page) {
+                let tab = entry.0;
+                me.pages.borrow_mut().push(entry);
+                // After GTK is done moving it: the app's model follows, and the window syncs.
+                let s = Rc::downgrade(&s);
+                glib::idle_add_local_once(move || {
+                    if let Some(s) = s.upgrade() {
+                        s.dispatch(Message::TabToGroup { tab, group: index, pos: pos.max(0) as usize });
+                    }
+                });
             }
         });
         // A tab's menu: the usual close actions.

@@ -13,7 +13,8 @@ e a interface foi reescrita com os componentes do GNOME.
 ## Feito com os componentes do GNOME
 
 - Janela, cabeçalho e menu principal do libadwaita; abas em `AdwTabView`, que dá para reordenar
-  arrastando
+  ou levar de uma divisão para outra arrastando; divisões lado a lado com largura ajustável, que a
+  sessão guarda
 - Preferências em `AdwPreferencesDialog`, com busca; avisos em `AdwToast`; diálogos em
   `AdwAlertDialog`; "Sobre" em `AdwAboutDialog`
 - Terminal VTE, o mesmo do Console e do GNOME Terminal
@@ -22,7 +23,7 @@ e a interface foi reescrita com os componentes do GNOME.
   muda junto quando elas mudam
 - Uma janela só: `tinta-gnome arquivo` abre na janela que já está aberta (pelo `GtkApplication`)
 - Acentos com teclas mortas e métodos de entrada pelo GTK. Em ambientes sem método de entrada, o
-  editor compõe sozinho, então `´` e `a` ainda dão `á`
+  editor e os campos de texto compõem sozinhos, então `´` e `a` ainda dão `á`
 
 O texto é um widget próprio desenhado com o GSK, e não o `GtkSourceView`: é o que mantém os
 recursos do editor, como múltiplos cursores, seleção em coluna, dobras pela árvore de sintaxe,
@@ -322,6 +323,5 @@ GPL-3.0-only. Este é um projeto independente, sem ligação com o GNOME.
   cursor" ou breakpoints que só registram no console, e o programa depurado não recebe o que se digita
   (a entrada padrão). Para isso, use o terminal.
 - No Vim: sem `:global`, `:normal`, mapeamentos próprios nem `.vimrc`.
-- Sem navegação pelo teclado na árvore de arquivos, e uma aba não passa de uma divisão para outra
-  arrastando. As divisões lado a lado têm a mesma largura: ainda não dá para ajustar.
+- Sem navegação pelo teclado na árvore de arquivos.
 - A quebra de linha fica desligada em arquivos acima de 4 milhões de caracteres.

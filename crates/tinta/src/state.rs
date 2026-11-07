@@ -249,6 +249,13 @@ impl TabModel {
             self.items.insert(at, item);
         }
     }
+    /// A tab that comes from another split, put where it was dropped.
+    pub fn insert_at(&mut self, id: TabId, text: String, pos: usize) {
+        let at = pos.min(self.items.len());
+        self.items.insert(at, (id, text));
+        self.active = Some(id);
+    }
+
     pub fn remove(&mut self, e: Entity) {
         self.items.retain(|(t, _)| *t != e);
         if self.active == Some(e) {

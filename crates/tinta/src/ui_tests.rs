@@ -1211,3 +1211,35 @@ fn ctrl_click_in_the_terminal_follows_a_location() {
     assert_eq!(ui.app.tabs.len(), 1);
 }
 
+
+#[test]
+fn tabs_move_between_splits_and_an_emptied_split_goes_away() {
+    let dir = temp_dir("splits");
+    let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));
+    std::fs::write(&a, "a\n").unwrap();
+    std::fs::write(&b, "b\n").unwrap();
+    let mut ui = Ui::new(vec![a.clone(), b.clone()]);
+    ui.cmd(Command::SplitRight);
+    assert_eq!(ui.app.groups.len(), 2);
+    let tab_b = ui.app.groups[0].tabs().into_iter().find(|t| ui.app.docs[&ui.app.tabs[t].doc].doc.file_name() == "b.txt").unwrap();
+    // b.txt dropped onto the second split, at its start.
+    ui.msg(Message::TabToGroup { tab: tab_b, group: 1, pos: 0 });
+    assert_eq!(ui.app.groups[1].tabs()[0], tab_b);
+    assert_eq!(ui.app.active_group, 1);
+    assert_eq!(ui.app.active().unwrap().1.doc.file_name(), "b.txt");
+    assert!(!ui.app.groups[0].tabs().contains(&tab_b));
+    // Within the same split, it just moves along.
+    let last = ui.app.groups[1].tabs().len() - 1;
+    ui.msg(Message::TabToGroup { tab: tab_b, group: 1, pos: last });
+    assert_eq!(*ui.app.groups[1].tabs().last().unwrap(), tab_b);
+    // Widths from dragging the divider, kept for the session.
+    ui.msg(Message::GroupWeights(vec![1.5, 0.5]));
+    assert_eq!(ui.app.groups.iter().map(|g| g.weight).collect::<Vec<_>>(), vec![1.5, 0.5]);
+    assert!(ui.app.build_session().groups.iter().any(|g| (g.weight - 1.5).abs() < 1e-6));
+    // Moving everything out of the first split removes it.
+    for t in ui.app.groups[0].tabs() {
+        ui.msg(Message::TabToGroup { tab: t, group: 1, pos: 0 });
+    }
+    assert_eq!(ui.app.groups.len(), 1);
+    assert_eq!(ui.app.groups[0].tabs().len(), ui.app.tabs.len());
+}

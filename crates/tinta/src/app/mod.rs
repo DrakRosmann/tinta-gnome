@@ -204,6 +204,10 @@ pub enum Message {
     SidebarResize(f32),
     PanelResize(f32),
     GroupResize(usize, f32),
+    /// How wide each split is, from dragging the dividers between them.
+    GroupWeights(Vec<f32>),
+    /// A tab dragged to another split, or to another place in its own.
+    TabToGroup { tab: TabId, group: usize, pos: usize },
     PanelShow(PanelView),
     PanelClose,
     TickFrame,
@@ -439,6 +443,34 @@ pub fn editor_font(settings: &Settings, system_mono: Option<&str>) -> String {
 }
 
 impl App {
+    pub fn tab_to_group(&mut self, tab: TabId, group: usize, pos: usize) -> Task {
+        let Some(from) = self.groups.iter().position(|g| g.model.iter().any(|e| e == tab)) else { return Task::none() };
+        let to = group.min(self.groups.len() - 1);
+        if from == to {
+            self.groups[to].model.position_set(tab, pos as u16);
+            self.groups[to].model.activate(tab);
+        } else {
+            let title = self.groups[from].model.text(tab).unwrap_or_default().to_string();
+            let was_active = self.groups[from].active_tab() == Some(tab);
+            self.groups[from].model.remove(tab);
+            if was_active && !self.groups[from].model.is_empty() {
+                self.groups[from].model.activate_position(0);
+            }
+            self.groups[to].model.insert_at(tab, title, pos);
+            self.active_group = to;
+            // A split left with nothing in it goes away.
+            if self.groups[from].model.is_empty() && self.groups.len() > 1 {
+                self.groups.remove(from);
+                if self.active_group > from {
+                    self.active_group -= 1;
+                }
+            }
+        }
+        self.mark_session_dirty();
+        self.focus = Focus::Editor;
+        self.on_active_changed()
+    }
+
     pub fn editor_font_family(&self) -> String {
         editor_font(&self.settings, self.system_mono.as_deref())
     }
@@ -563,6 +595,16 @@ impl App {
                 self.mark_session_dirty();
                 Task::none()
             }
+            Message::GroupWeights(w) => {
+                if w.len() == self.groups.len() {
+                    for (g, x) in self.groups.iter_mut().zip(w) {
+                        g.weight = x.max(0.05);
+                    }
+                    self.mark_session_dirty();
+                }
+                Task::none()
+            }
+            Message::TabToGroup { tab, group, pos } => self.tab_to_group(tab, group, pos),
             Message::GroupResize(g, d) => {
                 self.resize_groups(g, d);
                 Task::none()
