@@ -47,6 +47,9 @@ pub struct Window {
     right: gtk::Paned,
     groups_box: gtk::Box,
     welcome: adw::BreakpointBin,
+    /// The recent folders and files under the welcome buttons.
+    recent: gtk::Box,
+    recent_shown: RefCell<Option<(Vec<std::path::PathBuf>, Vec<std::path::PathBuf>)>>,
     groups: RefCell<Vec<Rc<GroupView>>>,
     pub panel: Rc<Panel>,
     pub sidebar: Rc<Sidebar>,
@@ -125,7 +128,12 @@ impl Window {
             });
             buttons.append(&b);
         }
-        welcome.set_child(Some(&buttons));
+        let recent = gtk::Box::new(gtk::Orientation::Vertical, 18);
+        let clamp = adw::Clamp::builder().maximum_size(520).child(&recent).margin_top(30).build();
+        let welcome_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        welcome_box.append(&buttons);
+        welcome_box.append(&clamp);
+        welcome.set_child(Some(&welcome_box));
         // Too narrow for the buttons side by side, they stack.
         let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(adw::BreakpointConditionLengthType::MaxWidth, 560.0, adw::LengthUnit::Sp));
         narrow.add_setter(&buttons, "orientation", Some(&gtk::Orientation::Vertical.to_value()));
@@ -178,6 +186,8 @@ impl Window {
             right,
             groups_box,
             welcome,
+            recent,
+            recent_shown: RefCell::new(None),
             groups: RefCell::new(Vec::new()),
             panel,
             sidebar,
@@ -554,6 +564,7 @@ impl Window {
         }
         let any_tab = app.groups.iter().any(|g| !g.model.is_empty());
         if !any_tab && groups.len() <= 1 {
+            self.sync_recent(shell, app);
             if self.welcome.parent().is_none() {
                 for g in groups.iter() {
                     g.root.set_visible(false);
@@ -570,6 +581,57 @@ impl Window {
             g.sync(shell, app, i);
         }
         changed
+    }
+}
+
+impl Window {
+    /// The welcome screen's lists of recent folders and files, rebuilt when they change.
+    fn sync_recent(&self, shell: &Rc<Shell>, app: &App) {
+        const SHOWN: usize = 5;
+        let pick = |list: &[std::path::PathBuf], dir: bool| -> Vec<std::path::PathBuf> {
+            list.iter().filter(|p| if dir { p.is_dir() } else { p.is_file() }).take(SHOWN).cloned().collect()
+        };
+        let now = (pick(&app.recent_folders, true), pick(&app.recent_files, false));
+        let mut shown = self.recent_shown.borrow_mut();
+        if shown.as_ref() == Some(&now) {
+            return;
+        }
+        while let Some(c) = self.recent.first_child() {
+            self.recent.remove(&c);
+        }
+        for (title, list, icon, folder) in [("Recent Folders", &now.0, "folder-symbolic", true), ("Recent Files", &now.1, "text-x-generic-symbolic", false)] {
+            if list.is_empty() {
+                continue;
+            }
+            let group = adw::PreferencesGroup::builder().title(tr(title)).build();
+            for path in list {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+                let place = path.parent().map(home_relative).unwrap_or_default();
+                let row = adw::ActionRow::builder().title(name).subtitle(place).use_markup(false).activatable(true).tooltip_text(path.display().to_string()).build();
+                row.add_prefix(&gtk::Image::from_icon_name(icon));
+                row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+                let s = Rc::downgrade(shell);
+                let path = path.clone();
+                row.connect_activated(move |_| {
+                    if let Some(s) = s.upgrade() {
+                        s.dispatch(if folder { Message::OpenFolderPath(path.clone()) } else { Message::OpenFiles(vec![path.clone()]) });
+                    }
+                });
+                group.add(&row);
+            }
+            self.recent.append(&group);
+        }
+        self.recent.set_visible(self.recent.first_child().is_some());
+        *shown = Some(now);
+    }
+}
+
+/// `/home/me/src` as `~/src`.
+fn home_relative(p: &Path) -> String {
+    match dirs::home_dir().and_then(|h| p.strip_prefix(&h).ok().map(Path::to_path_buf)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => p.display().to_string(),
     }
 }
 
