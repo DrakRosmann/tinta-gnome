@@ -2,7 +2,7 @@
 //! `update`, and the mouse goes through the text area's own event handling, at the same grid
 //! positions it paints. Clicking menus and the like is left to the end-to-end tests in GNOME.
 
-use crate::app::{App, Flags, Focus, Message, PaletteMode, SidebarView};
+use crate::app::{App, Flags, Focus, Message, SidebarView};
 use crate::bus;
 use crate::fx::{Effect, Task};
 use crate::gfx::{self, Event, Modifiers, Point, Rectangle, Size, keyboard, mouse, window};
@@ -183,6 +183,13 @@ impl Ui {
 
     fn text(&self) -> String {
         self.app.active().unwrap().1.doc.rope.to_string()
+    }
+
+    /// The editor closes, and the test keeps the lock: no other test touches the saved session
+    /// before this one opens it again.
+    fn close(self) -> MutexGuard<'static, ()> {
+        let Ui { _guard, .. } = self;
+        _guard
     }
 
     fn cmd(&mut self, c: Command) {
@@ -743,10 +750,9 @@ fn opening_a_file_does_not_lose_the_session_it_would_have_restored() {
     ui.app.write_backups(false);
     crate::app::save_session(&ui.app);
     let text = ui.text();
-    drop(ui);
+    let guard = ui.close();
     let other = temp_dir("other").join("b.txt");
     std::fs::write(&other, "b").unwrap();
-    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let flags = Flags { targets: vec![(other, None)], new_session: false, dark: true, system_mono: None, font_names: Vec::new() };
     let (app, _) = App::new(flags);
     drop(guard);
@@ -783,11 +789,8 @@ fn hot_exit_brings_unsaved_text_back() {
     ui.app.settings.restore_session = true;
     crate::app::save_session(&ui.app);
     let doc_text = ui.text();
-    drop(ui);
     // A new run, restoring: same text, still dirty, nothing written to disk.
-    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    drop(_g);
-    let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = ui.close();
     let flags = Flags { targets: Vec::new(), new_session: false, dark: true, system_mono: None, font_names: Vec::new() };
     let (app, _) = App::new(flags);
     drop(guard);
