@@ -920,7 +920,6 @@ impl<Message: Clone> EditorView<'_, Message> {
                                 Quad {
                                     bounds: rect,
                                     border: Border { color: alpha(pal.fg, 0.55), width: 1.0, radius: 2.0 },
-                                    
                                     ..Quad::default()
                                 },
                                 alpha(pal.accent, 0.18),

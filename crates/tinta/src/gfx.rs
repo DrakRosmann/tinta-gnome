@@ -53,9 +53,6 @@ impl Rectangle {
     pub fn position(&self) -> Point {
         Point::new(self.x, self.y)
     }
-    pub fn size(&self) -> Size {
-        Size::new(self.width, self.height)
-    }
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x && p.x < self.x + self.width && p.y >= self.y && p.y < self.y + self.height
     }
@@ -73,9 +70,7 @@ pub struct Color {
 }
 
 impl Color {
-    pub const WHITE: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
     pub const BLACK: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-    pub const TRANSPARENT: Color = Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 };
     pub fn from_rgb(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b, a: 1.0 }
     }
@@ -84,9 +79,6 @@ impl Color {
     }
     pub fn from_rgba8(r: u8, g: u8, b: u8, a: f32) -> Self {
         Self { a, ..Self::from_rgb8(r, g, b) }
-    }
-    pub fn from_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self { r, g, b, a }
     }
     pub fn rgba(&self) -> gdk::RGBA {
         gdk::RGBA::new(self.r, self.g, self.b, self.a)
@@ -265,8 +257,6 @@ pub mod mouse {
         Idle,
         Pointer,
         Text,
-        ResizingHorizontally,
-        ResizingVertically,
     }
 
     impl Interaction {
@@ -275,8 +265,6 @@ pub mod mouse {
                 Interaction::Idle => "default",
                 Interaction::Pointer => "pointer",
                 Interaction::Text => "text",
-                Interaction::ResizingHorizontally => "col-resize",
-                Interaction::ResizingVertically => "row-resize",
             }
         }
     }
@@ -420,17 +408,24 @@ pub struct Painter<'a> {
 
 impl Painter<'_> {
     pub fn fill_quad(&mut self, q: Quad, color: Color) {
-        if color.a <= 0.0 || q.bounds.width <= 0.0 || q.bounds.height <= 0.0 {
+        if q.bounds.width <= 0.0 || q.bounds.height <= 0.0 {
             return;
         }
         let rect = q.bounds.graphene();
-        if q.border.radius > 0.0 {
-            let rounded = gsk::RoundedRect::from_rect(rect, q.border.radius);
-            self.snapshot.push_rounded_clip(&rounded);
-            self.snapshot.append_color(&color.rgba(), &rect);
-            self.snapshot.pop();
-        } else {
-            self.snapshot.append_color(&color.rgba(), &rect);
+        let rounded = gsk::RoundedRect::from_rect(rect, q.border.radius);
+        if color.a > 0.0 {
+            if q.border.radius > 0.0 {
+                self.snapshot.push_rounded_clip(&rounded);
+                self.snapshot.append_color(&color.rgba(), &rect);
+                self.snapshot.pop();
+            } else {
+                self.snapshot.append_color(&color.rgba(), &rect);
+            }
+        }
+        // The outline, drawn inside the bounds.
+        if q.border.width > 0.0 && q.border.color.a > 0.0 {
+            let c = q.border.color.rgba();
+            self.snapshot.append_border(&rounded, &[q.border.width; 4], &[c, c, c, c]);
         }
     }
 

@@ -232,9 +232,9 @@ impl Panel {
             }
         });
         let s = Rc::downgrade(shell);
-        term.connect_window_title_changed(move |t| {
+        term.connect_termprop_changed(Some("xterm.title"), move |t, prop| {
             if let Some(s) = s.upgrade() {
-                s.dispatch(Message::TermTitle(id, t.window_title().map(|x| x.to_string())));
+                s.dispatch(Message::TermTitle(id, t.dup_termprop_string(prop).0.map(|x| x.to_string())));
             }
         });
         let focus = gtk::EventControllerFocus::new();
