@@ -3,7 +3,7 @@
 use super::{App, Focus, KeyEv, Message};
 use crate::i18n::tr;
 use crate::state::TabKind;
-use cosmic::app::Task;
+use crate::fx::{self, Task};
 use tinta_core::keymap::Command;
 use tinta_core::settings::LineNumbers;
 use tinta_core::vim::{Action, Ctx, Key};
@@ -78,7 +78,7 @@ impl App {
     }
 
     /// `Some`: Vim dealt with it. `None`: on to the keymap and the editor.
-    pub fn vim_on_key(&mut self, ev: &KeyEv) -> Option<Task<Message>> {
+    pub fn vim_on_key(&mut self, ev: &KeyEv) -> Option<Task> {
         if !self.vim_active() || ev.mods.alt() || ev.mods.logo() || self.keymap.is_pending() {
             return None;
         }
@@ -114,7 +114,7 @@ impl App {
         Some(self.vim_actions(out.actions))
     }
 
-    fn vim_actions(&mut self, actions: Vec<Action>) -> Task<Message> {
+    fn vim_actions(&mut self, actions: Vec<Action>) -> Task {
         let mut tasks = Vec::new();
         for a in actions {
             tasks.push(self.vim_action(a));
@@ -122,7 +122,7 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn vim_action(&mut self, a: Action) -> Task<Message> {
+    fn vim_action(&mut self, a: Action) -> Task {
         match a {
             Action::Save => self.save_active(),
             Action::SaveAll => self.save_all_dirty_named(),
@@ -157,11 +157,10 @@ impl App {
             Action::CommandLine(prefix) => {
                 self.vim_line = Some((prefix, String::new()));
                 self.focus = Focus::Input;
-                cosmic::widget::text_input::focus(cosmic::widget::Id::new(VIM_LINE))
+                fx::focus(VIM_LINE)
             }
-            Action::SetClipboard(text) => cosmic::iced::clipboard::write(text),
-            Action::PasteClipboard { before } => cosmic::iced::clipboard::read()
-                .map(move |t| cosmic::Action::App(Message::Vim(VimMsg::Pasted(t, before)))),
+            Action::SetClipboard(text) => fx::clipboard_write(text),
+            Action::PasteClipboard { before } => fx::clipboard_read(move |t| Message::Vim(VimMsg::Pasted(t, before))),
             Action::Run(id) => match Command::from_id(id) {
                 Some(c) => self.run(c),
                 None => Task::none(),
@@ -197,7 +196,7 @@ impl App {
     }
 
     /// `:q` closes the tab, and the last tab closes the editor. `:bd` only ever closes the tab.
-    fn vim_close(&mut self, force: bool, quit_when_last: bool) -> Task<Message> {
+    fn vim_close(&mut self, force: bool, quit_when_last: bool) -> Task {
         let Some(id) = self.active_tab_id() else {
             return if quit_when_last { self.request_quit() } else { Task::none() };
         };
@@ -212,7 +211,7 @@ impl App {
         task
     }
 
-    fn vim_set(&mut self, opt: &str) -> Task<Message> {
+    fn vim_set(&mut self, opt: &str) -> Task {
         let s = &mut self.settings;
         match opt.trim() {
             "wrap" => s.word_wrap = true,
@@ -256,7 +255,7 @@ impl App {
         }
     }
 
-    pub fn on_vim(&mut self, m: VimMsg) -> Task<Message> {
+    pub fn on_vim(&mut self, m: VimMsg) -> Task {
         match m {
             VimMsg::Input(s) => {
                 if let Some((_, text)) = &mut self.vim_line {

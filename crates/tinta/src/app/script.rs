@@ -18,9 +18,8 @@ use super::keys::KeyEv;
 use super::{App, Message};
 use crate::bus;
 use crate::ui::editor_view::{EditorEvent, PressButton};
-use cosmic::app::Task;
-use cosmic::iced::keyboard::Modifiers;
-use cosmic::iced::window;
+use crate::fx::{self, Task};
+use crate::gfx::Modifiers;
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -104,7 +103,7 @@ fn key_event(spec: &str) -> Option<KeyEv> {
 }
 
 impl App {
-    pub fn on_script(&mut self, step: Step) -> Task<Message> {
+    pub fn on_script(&mut self, step: Step) -> Task {
         match step {
             Step::Cmd(id) => match Command::from_id(&id) {
                 Some(c) => self.run(c),
@@ -155,29 +154,14 @@ impl App {
             },
             Step::Open(p) => self.open_path(&p),
             Step::Folder(p) => self.open_folder(p),
-            Step::Shot(path) => {
-                let Some(id) = self.core.main_window_id() else { return Task::none() };
-                window::screenshot(id).map(move |shot| {
-                    let w = shot.size.width;
-                    let h = shot.size.height;
-                    match image::RgbaImage::from_raw(w, h, shot.rgba.to_vec()) {
-                        Some(img) => {
-                            if let Err(e) = img.save(&path) {
-                                eprintln!("script: {e}");
-                            }
-                        }
-                        None => eprintln!("script: bad screenshot"),
-                    }
-                    cosmic::Action::App(Message::Noop)
-                })
-            }
+            Step::Shot(path) => Task::effect(fx::Effect::Screenshot(path)),
             Step::Dump(path) => {
                 let _ = std::fs::write(path, self.dump_state().to_string());
                 Task::none()
             }
             Step::Quit => {
                 self.persist_on_quit();
-                cosmic::iced::exit()
+                Task::effect(fx::Effect::Quit)
             }
         }
     }
@@ -213,7 +197,6 @@ impl App {
                 "console": self.debug.console.iter().map(|l| l.text.clone()).collect::<Vec<_>>(),
             },
             "title": self.title,
-            "gnome": self.look.is_gnome(),
             "sidebar": self.sidebar.map(|s| format!("{s:?}")),
             "panel": self.panel.map(|s| format!("{s:?}")),
             "palette": self.palette.as_ref().map(|p| json!({

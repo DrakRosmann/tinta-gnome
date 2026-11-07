@@ -1,7 +1,6 @@
 //! The application: all state lives here, every change goes through `update`.
 
 mod commands;
-mod look;
 mod debug;
 mod diff;
 mod docs;
@@ -24,21 +23,19 @@ pub use editing::{FIND_INPUT, MAX_SHOWN_MATCHES, REPLACE_INPUT};
 pub use explorer::ExplorerMsg;
 pub use palette::{PAction, PItem, PaletteMode, PaletteMsg, PaletteState, PALETTE_INPUT};
 pub use debug::{DEBUG_INPUT, DebugMsg, DebugPanel, WATCH_INPUT};
-pub use look::Look;
 pub use tasks::{TaskMsg, TaskPanel};
 pub use vim::{VIM_LINE, VimMsg};
 pub use search::{SearchMsg, SearchPanel, SearchRow, SEARCH_INPUT};
 
 use crate::bus;
+use crate::fx;
+use crate::gfx::Modifiers;
 use crate::i18n::tr;
 use crate::state::{DocEntry, DocId, Group, Metrics, Tab, TabId};
 use crate::ui;
 use crate::ui::editor_view::EditorEvent;
-use crate::ui::terminal::Session as TermSession;
-use cosmic::app::{Core, Task, context_drawer};
-use cosmic::iced::{Subscription, event, keyboard, window};
-use cosmic::widget::segmented_button;
-use cosmic::{Application, Element, Theme};
+
+pub use crate::fx::Task;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -49,10 +46,24 @@ use tinta_core::{find, lsp as core_lsp};
 
 pub const APP_ID: &str = "io.github.DrakRosmann.TintaGnome";
 
+/// The text field in dialogs that ask for something.
+pub const DIALOG_INPUT: &str = "dialog-input";
+
 pub struct Flags {
     pub targets: Vec<(PathBuf, Option<(usize, usize)>)>,
     pub new_session: bool,
-    pub look: Look,
+    /// What the desktop says: dark or light, and its monospace font.
+    pub dark: bool,
+    pub system_mono: Option<String>,
+    /// Monospace families installed, for the settings.
+    pub font_names: Vec<String>,
+}
+
+/// A terminal in the panel. The terminal itself is a VTE widget on the GTK side.
+#[derive(Debug, Clone)]
+pub struct TermInfo {
+    pub id: u64,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,15 +193,16 @@ pub enum BoolSetting {
 #[derive(Debug, Clone)]
 pub enum Message {
     Noop,
-    Surface(cosmic::surface::Action),
     Key(KeyEv),
-    Modifiers(keyboard::Modifiers),
+    Modifiers(Modifiers),
     InputFocus(bool),
     Cmd(Command),
     Editor(TabId, EditorEvent),
     Diff(TabId, ui::diff_view::DiffEvent),
-    TabActivate(usize, segmented_button::Entity),
-    TabClose(usize, segmented_button::Entity),
+    TabActivate(usize, TabId),
+    TabClose(usize, TabId),
+    /// A tab dragged to another place in its group.
+    TabMoved(usize, TabId, usize),
     SidebarShow(SidebarView),
     SidebarResize(f32),
     PanelResize(f32),
@@ -213,8 +225,8 @@ pub enum Message {
     Task(TaskMsg),
     Vim(VimMsg),
     Debug(DebugMsg),
-    /// A GNOME interface setting changed: key, and value as gsettings prints it.
-    GnomeSetting(String, String),
+    /// The desktop's style changed: dark or light, and its monospace font.
+    StyleChanged { dark: bool, mono: Option<String> },
     TermLink(String, usize),
     OutlineJump(usize),
     CompletionPick(usize),
@@ -223,11 +235,8 @@ pub enum Message {
     Setting(SettingMsg),
     SettingsClose,
     FsEvent(Vec<PathBuf>),
-    TermWake(u64),
     TermTitle(u64, Option<String>),
-    TermWrite(u64, Vec<u8>),
     TermExited(u64),
-    TermResize(u64, u16, u16, f32, f32),
     TermFocus,
     TermSelect(usize),
     TermKill(usize),
@@ -235,13 +244,12 @@ pub enum Message {
     CloseRequested,
     WindowFocused(bool),
     Dropped(Vec<PathBuf>),
-    RemoteOpen(Vec<crate::instance::Target>),
+    RemoteOpen(Vec<crate::Target>),
     Script(script::Step),
     ThemeChanged,
 }
 
 pub struct App {
-    pub core: Core,
     pub settings: Settings,
     pub base_font_size: f32,
     pub metrics: Metrics,
@@ -258,7 +266,7 @@ pub struct App {
     pub git: GitPanel,
     pub tasks: TaskPanel,
     pub debug: DebugPanel,
-    pub look: Look,
+    pub system_mono: Option<String>,
     pub vim: tinta_core::vim::Vim,
     pub vim_line: Option<(char, String)>,
     pub vim_highlight: Option<String>,
@@ -267,7 +275,7 @@ pub struct App {
     pub sidebar_w: f32,
     pub panel: Option<PanelView>,
     pub panel_h: f32,
-    pub terms: Vec<TermSession>,
+    pub terms: Vec<TermInfo>,
     pub active_term: usize,
     pub find: FindState,
     pub palette: Option<PaletteState>,
@@ -292,7 +300,10 @@ pub struct App {
     pub zen: bool,
     pub fullscreen: bool,
     pub syntax_theme: Arc<syntect::highlighting::Theme>,
+    /// Whether the syntax colors are the dark ones right now.
     pub dark: bool,
+    /// What the desktop prefers.
+    pub dark_pref: bool,
     pub edit_tab: Option<TabId>,
     pub want_reveal: bool,
     pub watcher: Option<notify::RecommendedWatcher>,
@@ -304,7 +315,9 @@ pub struct App {
     pub keymap_mtime: Option<std::time::SystemTime>,
     pub font_names: Vec<String>,
     pub syntax_theme_names: Vec<String>,
-    pub modifiers: keyboard::Modifiers,
+    pub modifiers: Modifiers,
+    /// Set when the last key isn't the app's, so the focused widget gets it: a terminal, a field.
+    pub key_passthrough: bool,
     pub shortcuts_filter: String,
     pub title: String,
     pub session_dirty: Option<Instant>,
@@ -314,24 +327,8 @@ pub struct App {
     pub groups_flip: std::cell::Cell<bool>,
 }
 
-impl Application for App {
-    type Executor = cosmic::executor::Default;
-    type Flags = Flags;
-    type Message = Message;
-    const APP_ID: &'static str = APP_ID;
-
-    fn core(&self) -> &Core {
-        &self.core
-    }
-
-    fn core_mut(&mut self) -> &mut Core {
-        &mut self.core
-    }
-
-    fn init(mut core: Core, flags: Flags) -> (Self, Task<Message>) {
-        core.set_keyboard_nav(false);
-        core.window.content_container = false;
-        core.window.show_context = false;
+impl App {
+    pub fn new(flags: Flags) -> (Self, Task) {
         let (settings, settings_err) = Settings::load();
         let mut keymap = Keymap::with_defaults();
         let mut key_errs = Vec::new();
@@ -339,11 +336,10 @@ impl Application for App {
         if let Ok(src) = std::fs::read_to_string(tinta_core::settings::keybindings_path()) {
             key_errs = keymap.apply_user(&src);
         }
-        let dark = cosmic::theme::is_dark();
+        let dark = flags.dark;
         let syntax_theme = tinta_core::syntax::theme_by_name(&settings.syntax_theme, dark);
-        let metrics = Metrics::new(&if flags.look.is_gnome() && settings.font_family == tinta_core::settings::Settings::default().font_family { flags.look.gnome.mono.family.clone() } else { settings.font_family.clone() }, settings.font_size, settings.line_height);
+        let metrics = Metrics::new(&editor_font(&settings, flags.system_mono.as_deref()), settings.font_size, settings.line_height);
         let mut app = App {
-            core,
             base_font_size: settings.font_size,
             metrics,
             keymap,
@@ -359,7 +355,7 @@ impl Application for App {
             git: GitPanel::default(),
             tasks: TaskPanel::default(),
             debug: DebugPanel::default(),
-            look: flags.look.clone(),
+            system_mono: flags.system_mono.clone(),
             vim: tinta_core::vim::Vim::new(),
             vim_line: None,
             vim_highlight: None,
@@ -394,6 +390,7 @@ impl Application for App {
             fullscreen: false,
             syntax_theme,
             dark,
+            dark_pref: dark,
             edit_tab: None,
             want_reveal: false,
             watcher: None,
@@ -403,9 +400,10 @@ impl Application for App {
             settings_open: false,
             settings_mtime: file_mtime(&tinta_core::settings::settings_path()),
             keymap_mtime,
-            font_names: mono_font_names(),
+            font_names: if flags.font_names.is_empty() { vec!["Monospace".into()] } else { flags.font_names.clone() },
             syntax_theme_names: tinta_core::syntax::theme_names(),
-            modifiers: keyboard::Modifiers::default(),
+            modifiers: Modifiers::default(),
+            key_passthrough: false,
             shortcuts_filter: String::new(),
             title: "Tinta".into(),
             session_dirty: None,
@@ -425,89 +423,27 @@ impl Application for App {
         let mut tasks = vec![app.restore(flags.targets)];
         tasks.push(app.update_title());
         script::start();
-        if app.settings.ui_theme != AppTheme::System || app.look.is_gnome() {
-            tasks.push(app.apply_ui_theme());
-        }
-        app.watch_desktop();
         (app, Task::batch(tasks))
     }
 
-    fn header_start(&self) -> Vec<Element<'_, Message>> {
-        // GNOME apps keep their menu behind a button at the end of the header bar.
-        if self.zen || self.look.is_gnome() { Vec::new() } else { vec![ui::menu::menu_bar(self)] }
-    }
-
-    fn header_center(&self) -> Vec<Element<'_, Message>> {
-        // ...and their title in the middle of it.
-        if self.zen || !self.look.is_gnome() {
-            return Vec::new();
-        }
-        let title = cosmic::widget::text(self.title.clone()).font(cosmic::font::semibold()).size(14).wrapping(cosmic::iced::widget::text::Wrapping::None);
-        vec![ui::menu::header_colors(title.into())]
-    }
-
-    fn header_end(&self) -> Vec<Element<'_, Message>> {
-        if self.zen {
-            return Vec::new();
-        }
-        if self.look.is_gnome() {
-            return vec![ui::workspace::header_buttons(self), ui::menu::primary_menu(self)];
-        }
-        vec![ui::workspace::header_buttons(self)]
-    }
-
-    fn context_drawer(&self) -> Option<context_drawer::ContextDrawer<'_, Message>> {
-        if !self.settings_open {
-            return None;
-        }
-        Some(
-            context_drawer::context_drawer(ui::settings_page::view(self), Message::SettingsClose)
-                .title(tr("Settings")),
-        )
-    }
-
-    fn dialog(&self) -> Option<Element<'_, Message>> {
-        ui::popups::dialog(self)
-    }
-
-    fn on_close_requested(&self, id: window::Id) -> Option<Message> {
-        // Menus are popup surfaces, and this is called when they close too.
-        (self.core.main_window_id() == Some(id)).then_some(Message::CloseRequested)
-    }
-
-    fn on_context_drawer(&mut self) -> Task<Message> {
-        self.settings_open = self.core.window.show_context;
-        Task::none()
-    }
-
-    fn subscription(&self) -> Subscription<Message> {
-        let mut subs = vec![
-            bus::subscription(),
-            event::listen_with(|ev, status, _id| keys::from_event(ev, status)),
-            cosmic::iced::time::every(Duration::from_millis(1000)).map(|_| Message::TickSlow),
-        ];
-        if self.needs_frame_tick() {
-            subs.push(cosmic::iced::time::every(Duration::from_millis(16)).map(|_| Message::TickFrame));
-        }
-        Subscription::batch(subs)
-    }
-
-    fn system_theme_update(&mut self, _keys: &[&'static str], _new: &cosmic::cosmic_theme::Theme) -> Task<Message> {
-        cosmic::task::message(cosmic::Action::App(Message::ThemeChanged))
-    }
-
-    fn system_theme_mode_update(&mut self, _keys: &[&'static str], _new: &cosmic::cosmic_theme::ThemeMode) -> Task<Message> {
-        cosmic::task::message(cosmic::Action::App(Message::ThemeChanged))
-    }
-
-    fn update(&mut self, message: Message) -> Task<Message> {
+    pub fn update(&mut self, message: Message) -> Task {
         let task = self.handle(message);
         let after = self.after_update();
         Task::batch([task, after])
     }
+}
 
-    fn view(&self) -> Element<'_, Message> {
-        ui::workspace::view(self)
+/// The editor's font: the one in the settings, unless it's the default and the desktop has one.
+pub fn editor_font(settings: &Settings, system_mono: Option<&str>) -> String {
+    match system_mono {
+        Some(m) if settings.font_family == Settings::default().font_family && !m.is_empty() => m.to_string(),
+        _ => settings.font_family.clone(),
+    }
+}
+
+impl App {
+    pub fn editor_font_family(&self) -> String {
+        editor_font(&self.settings, self.system_mono.as_deref())
     }
 }
 
@@ -518,27 +454,6 @@ pub fn file_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 fn load_user_snippets() -> HashMap<String, Vec<tinta_core::snippet::Definition>> {
     let Ok(src) = std::fs::read_to_string(tinta_core::settings::snippets_path()) else { return HashMap::new() };
     serde_json::from_str(&tinta_core::settings::strip_jsonc(&src)).unwrap_or_default()
-}
-
-/// Monospace families installed on the system, for the settings page.
-fn mono_font_names() -> Vec<String> {
-    let mut names: Vec<String> = {
-        let mut system = cosmic::iced::advanced::graphics::text::font_system().write().expect("font system");
-        let fs = system.raw();
-        let mut v: Vec<String> = fs
-            .db()
-            .faces()
-            .filter(|f| f.monospaced)
-            .filter_map(|f| f.families.first().map(|(n, _)| n.clone()))
-            .collect();
-        v.sort();
-        v.dedup();
-        v
-    };
-    if names.is_empty() {
-        names.push("Noto Sans Mono".into());
-    }
-    names
 }
 
 impl App {
@@ -568,15 +483,11 @@ impl App {
         Some((t, d))
     }
 
-    pub fn toast(&mut self, text: impl Into<String>) -> Task<Message> {
+    /// A short notice. The window shows it and takes it away by itself.
+    pub fn toast(&mut self, text: impl Into<String>) -> Task {
         self.toast = Some(text.into());
         self.toast_gen += 1;
-        let gen_id = self.toast_gen;
-        cosmic::task::future(async move {
-            tokio::time::sleep(Duration::from_secs(4)).await;
-            bus::send(Message::Toast(format!("\0clear{gen_id}")));
-            Message::Noop
-        })
+        Task::none()
     }
 
     pub fn needs_frame_tick(&self) -> bool {
@@ -605,10 +516,9 @@ impl App {
         }
     }
 
-    fn handle(&mut self, message: Message) -> Task<Message> {
+    fn handle(&mut self, message: Message) -> Task {
         match message {
             Message::Noop => Task::none(),
-            Message::Surface(a) => cosmic::task::message(cosmic::Action::Cosmic(cosmic::app::Action::Surface(a))),
             Message::Key(ev) => self.on_key(ev),
             Message::Modifiers(m) => {
                 self.modifiers = m;
@@ -631,6 +541,13 @@ impl App {
                 self.focus = Focus::Editor;
                 self.close_popups();
                 self.on_active_changed()
+            }
+            Message::TabMoved(g, e, to) => {
+                if let Some(gr) = self.groups.get_mut(g) {
+                    gr.model.position_set(e, to as u16);
+                    self.mark_session_dirty();
+                }
+                Task::none()
             }
             Message::TabClose(g, e) => {
                 let Some(id) = self.groups.get(g).and_then(|gr| gr.model.data::<TabId>(e).copied()) else {
@@ -691,7 +608,7 @@ impl App {
             }
             Message::SaveAsTo(tab, p) => self.save_tab_as(tab, p),
             Message::Pasted(text) => self.on_pasted(text),
-            Message::CopyText(s) => cosmic::iced::clipboard::write(s),
+            Message::CopyText(s) => fx::clipboard_write(s),
             Message::Find(m) => self.on_find(m),
             Message::Palette(m) => self.on_palette(m),
             Message::Explorer(m) => self.on_explorer(m),
@@ -700,7 +617,16 @@ impl App {
             Message::Task(m) => self.on_task(m),
             Message::Vim(m) => self.on_vim(m),
             Message::Debug(m) => self.on_debug(m),
-            Message::GnomeSetting(k, v) => self.on_gnome_setting(k, v),
+            Message::StyleChanged { dark, mono } => {
+                let font_changed = mono != self.system_mono;
+                self.system_mono = mono;
+                if font_changed {
+                    self.apply_font();
+                }
+                self.dark_pref = dark;
+                self.refresh_syntax_theme();
+                Task::none()
+            }
             Message::TermLink(text, col) => self.on_term_link(text, col),
             Message::OutlineJump(line) => {
                 self.push_nav();
@@ -719,25 +645,12 @@ impl App {
             Message::Setting(m) => self.on_setting(m),
             Message::SettingsClose => {
                 self.settings_open = false;
-                self.core.window.show_context = false;
                 Task::none()
             }
             Message::FsEvent(paths) => self.on_fs_event(paths),
-            Message::TermWake(id) => {
-                if let Some(s) = self.terms.iter().find(|s| s.id == id) {
-                    s.wake_done();
-                }
-                Task::none()
-            }
             Message::TermTitle(id, t) => {
                 if let Some(s) = self.terms.iter_mut().find(|s| s.id == id) {
                     s.title = t.unwrap_or_default();
-                }
-                Task::none()
-            }
-            Message::TermWrite(id, b) => {
-                if let Some(s) = self.terms.iter().find(|s| s.id == id) {
-                    s.write(b);
                 }
                 Task::none()
             }
@@ -752,12 +665,6 @@ impl App {
                 }
                 Task::none()
             }
-            Message::TermResize(id, cols, rows, w, h) => {
-                if let Some(s) = self.terms.iter_mut().find(|s| s.id == id) {
-                    s.resize(cols, rows, w, h);
-                }
-                Task::none()
-            }
             Message::TermFocus => {
                 self.focus = Focus::Terminal;
                 Task::none()
@@ -769,12 +676,14 @@ impl App {
             }
             Message::TermKill(i) => {
                 if i < self.terms.len() {
-                    self.terms.remove(i);
+                    let t = self.terms.remove(i);
+                    let kill = Task::effect(fx::Effect::TermKill(t.id));
                     self.active_term = self.active_term.min(self.terms.len().saturating_sub(1));
                     if self.terms.is_empty() {
                         self.panel = None;
                         self.focus = Focus::Editor;
                     }
+                    return kill;
                 }
                 Task::none()
             }
@@ -815,9 +724,6 @@ impl App {
                         }
                     }
                 }
-                if let Some(id) = self.core.main_window_id() {
-                    tasks.push(window::gain_focus(id));
-                }
                 Task::batch(tasks)
             }
             Message::Script(s) => self.on_script(s),
@@ -849,8 +755,17 @@ impl App {
             .sum()
     }
 
+    /// Dark or light, as the settings and the desktop decide together.
+    pub fn is_dark(&self) -> bool {
+        match self.settings.ui_theme {
+            AppTheme::System => self.dark_pref,
+            AppTheme::Dark => true,
+            AppTheme::Light => false,
+        }
+    }
+
     pub fn refresh_syntax_theme(&mut self) {
-        let dark = cosmic::theme::is_dark();
+        let dark = self.is_dark();
         let name = self.settings.syntax_theme.clone();
         if dark == self.dark && self.syntax_theme.name.as_deref() == Some(theme_name_for(&name, dark).as_str()) {
             return;
@@ -867,21 +782,10 @@ impl App {
         }
     }
 
-    pub fn apply_ui_theme(&mut self) -> Task<Message> {
-        let theme = match self.look.theme(self.settings.ui_theme) {
-            Some(t) => t,
-            None => self.cosmic_theme(),
-        };
-        let t = cosmic::command::set_theme::<Message>(theme);
-        Task::batch([t, cosmic::task::message(cosmic::Action::App(Message::ThemeChanged))])
-    }
-
-    fn cosmic_theme(&self) -> Theme {
-        match self.settings.ui_theme {
-            AppTheme::System => cosmic::theme::system_preference(),
-            AppTheme::Dark => Theme::dark(),
-            AppTheme::Light => Theme::light(),
-        }
+    /// The window follows `settings.ui_theme` on its own; the text's colors follow here.
+    pub fn apply_ui_theme(&mut self) -> Task {
+        self.refresh_syntax_theme();
+        Task::none()
     }
 }
 

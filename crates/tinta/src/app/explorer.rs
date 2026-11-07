@@ -1,7 +1,7 @@
 //! The file tree.
 
 use super::{App, DialogState, Message};
-use cosmic::app::Task;
+use crate::fx::{self, Task};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -110,7 +110,7 @@ impl App {
         }
     }
 
-    pub fn on_explorer(&mut self, m: ExplorerMsg) -> Task<Message> {
+    pub fn on_explorer(&mut self, m: ExplorerMsg) -> Task {
         match m {
             ExplorerMsg::Click(i) => {
                 let Some(row) = self.explorer.rows.get(i).cloned() else { return Task::none() };
@@ -157,10 +157,10 @@ impl App {
                 self.dialog = Some(DialogState::TrashPath(p));
                 Task::none()
             }
-            ExplorerMsg::CopyPath(p) => cosmic::iced::clipboard::write(p.display().to_string()),
+            ExplorerMsg::CopyPath(p) => fx::clipboard_write(p.display().to_string()),
             ExplorerMsg::CopyRelative(p) => {
                 let rel = self.folder.as_ref().and_then(|f| p.strip_prefix(f).ok()).unwrap_or(&p);
-                cosmic::iced::clipboard::write(rel.display().to_string())
+                fx::clipboard_write(rel.display().to_string())
             }
             ExplorerMsg::Reveal(p) => {
                 let dir = if p.is_dir() { p } else { p.parent().map(PathBuf::from).unwrap_or(p) };
@@ -174,16 +174,11 @@ impl App {
             ExplorerMsg::TerminalHere(p) => {
                 let dir = if p.is_dir() { p } else { p.parent().map(PathBuf::from).unwrap_or(p) };
                 let id = self.new_id();
-                match crate::ui::terminal::Session::spawn(id, Some(dir), &self.settings.terminal_shell) {
-                    Ok(s) => {
-                        self.terms.push(s);
-                        self.active_term = self.terms.len() - 1;
-                        self.panel = Some(super::PanelView::Terminal);
-                        self.focus = super::Focus::Terminal;
-                        Task::none()
-                    }
-                    Err(e) => self.toast(format!("Terminal: {e}")),
-                }
+                self.terms.push(super::TermInfo { id, title: String::new() });
+                self.active_term = self.terms.len() - 1;
+                self.panel = Some(super::PanelView::Terminal);
+                self.focus = super::Focus::Terminal;
+                Task::batch([Task::effect(fx::Effect::TermSpawn { id, cwd: dir }), Task::effect(fx::Effect::TermFocus(id))])
             }
             ExplorerMsg::Refresh => {
                 self.reload_explorer();
@@ -224,7 +219,6 @@ impl App {
     }
 }
 
-pub fn dialog_focus() -> Task<Message> {
-    let id = cosmic::widget::Id::new(crate::ui::popups::DIALOG_INPUT);
-    Task::batch([cosmic::widget::text_input::focus(id.clone()), cosmic::widget::text_input::select_all(id)])
+pub fn dialog_focus() -> Task {
+    Task::batch([fx::focus(super::DIALOG_INPUT), fx::select_all(super::DIALOG_INPUT)])
 }

@@ -4,7 +4,7 @@ use super::{App, DialogState, Message};
 use crate::bus;
 use crate::i18n::tr;
 use crate::state::DocId;
-use cosmic::app::Task;
+use crate::fx::Task;
 use std::path::PathBuf;
 use tinta_core::git::{self as core_git, StatusEntry};
 
@@ -103,7 +103,7 @@ impl App {
         });
     }
 
-    pub fn update_blame(&mut self) -> Task<Message> {
+    pub fn update_blame(&mut self) -> Task {
         if !self.settings.inline_blame {
             return Task::none();
         }
@@ -124,7 +124,7 @@ impl App {
         Task::none()
     }
 
-    pub fn git_remote(&mut self, what: &'static str) -> Task<Message> {
+    pub fn git_remote(&mut self, what: &'static str) -> Task {
         let Some(root) = self.git.root.clone() else { return self.toast(tr("Not a git repository")) };
         self.git.busy = true;
         std::thread::spawn(move || {
@@ -138,7 +138,7 @@ impl App {
         Task::none()
     }
 
-    pub fn git_discard(&mut self, entry: StatusEntry) -> Task<Message> {
+    pub fn git_discard(&mut self, entry: StatusEntry) -> Task {
         let Some(root) = self.git.root.clone() else { return Task::none() };
         if let Err(e) = core_git::discard(&root, &entry) {
             return self.toast(e);
@@ -148,7 +148,7 @@ impl App {
         Task::none()
     }
 
-    pub fn on_git(&mut self, m: GitMsg) -> Task<Message> {
+    pub fn on_git(&mut self, m: GitMsg) -> Task {
         match m {
             GitMsg::Status { generation, root, branch, entries, ignored, ahead_behind } => {
                 if generation != self.git.generation {

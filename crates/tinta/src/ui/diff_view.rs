@@ -1,15 +1,11 @@
 //! Two versions of a file, side by side, scrolling together.
 
 use super::editor_view::{Palette, text_primitive};
+use crate::gfx::{Border, Color, Event, Font, Point, Quad, Rectangle, Shell, Size, Text, mouse};
 use crate::state::{DiffData, Metrics};
-use cosmic::iced::advanced::layout::{self, Layout};
-use cosmic::iced::advanced::renderer::{self, Quad};
-use cosmic::iced::advanced::text::{self as adv_text, Paragraph as _, Renderer as _};
-use cosmic::iced::advanced::widget::{Tree, tree};
-use cosmic::iced::advanced::{Clipboard, Renderer as _, Shell, Widget};
-use cosmic::iced::{Border, Color, Event, Font, Length, Pixels, Point, Rectangle, Size, alignment, mouse};
-use cosmic::{Element, Renderer, Theme};
 use std::time::{Duration, Instant};
+
+type Renderer<'a> = crate::gfx::Painter<'a>;
 use tinta_core::Document;
 use tinta_core::diff::RowKind;
 use tinta_core::display::char_width;
@@ -33,16 +29,16 @@ pub struct DiffView<'a, Message> {
 }
 
 #[derive(Default)]
-struct State {
-    cell_w: f32,
-    measured: Option<(Font, f32)>,
+pub struct State {
+    pub cell_w: f32,
+    pub measured: Option<(Font, f32)>,
     reported: Option<(f32, f32, f32)>,
     last_click: Option<Instant>,
     drag_bar: bool,
 }
 
 fn quad(r: &mut Renderer, bounds: Rectangle, c: Color) {
-    r.fill_quad(Quad { bounds, snap: true, ..Quad::default() }, c);
+    r.fill_quad(Quad { bounds, ..Quad::default() }, c);
 }
 
 fn alpha(c: Color, a: f32) -> Color {
@@ -104,54 +100,8 @@ fn col_to_vcol(doc: &Document, line: usize, col: usize) -> usize {
     tinta_core::display::char_to_vcol(doc.line_slice(line), col, doc.indent.width.max(1))
 }
 
-impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for DiffView<'a, Message> {
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<State>()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::new(State::default())
-    }
-
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
-    }
-
-    fn layout(&mut self, tree: &mut Tree, _r: &Renderer, limits: &layout::Limits) -> layout::Node {
-        let state = tree.state.downcast_mut::<State>();
-        if state.measured != Some((self.metrics.font, self.metrics.size)) {
-            let sample = "M".repeat(100);
-            let p = <Renderer as adv_text::Renderer>::Paragraph::with_text(adv_text::Text {
-                content: sample.as_str(),
-                bounds: Size::INFINITE,
-                size: Pixels(self.metrics.size),
-                line_height: adv_text::LineHeight::Absolute(Pixels(self.metrics.line_h)),
-                font: self.metrics.font,
-                align_x: adv_text::Alignment::Left,
-                align_y: alignment::Vertical::Top,
-                shaping: adv_text::Shaping::Advanced,
-                wrapping: adv_text::Wrapping::None,
-                ellipsize: adv_text::Ellipsize::None,
-            });
-            state.cell_w = (p.min_bounds().width / 100.0).max(1.0);
-            state.measured = Some((self.metrics.font, self.metrics.size));
-        }
-        layout::Node::new(limits.max())
-    }
-
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _r: &Renderer,
-        _c: &mut dyn Clipboard,
-        shell: &mut Shell<'_, Message>,
-        _v: &Rectangle,
-    ) {
-        let state = tree.state.downcast_mut::<State>();
-        let b = layout.bounds();
+impl<'a, Message: Clone + 'a> DiffView<'a, Message> {
+    pub fn update(&self, state: &mut State, event: &Event, b: Rectangle, cursor: mouse::Cursor, shell: &mut Shell<Message>) {
         let rep = (b.width, b.height, state.cell_w);
         if state.reported != Some(rep) && state.cell_w > 0.0 {
             state.reported = Some(rep);
@@ -200,10 +150,8 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for DiffView<'a, 
         }
     }
 
-    fn draw(&self, tree: &Tree, r: &mut Renderer, theme: &Theme, _s: &renderer::Style, layout: Layout<'_>, _c: mouse::Cursor, _v: &Rectangle) {
-        let state = tree.state.downcast_ref::<State>();
-        let b = layout.bounds();
-        let pal = Palette::from_theme(theme);
+    pub fn draw(&self, state: &State, r: &mut Renderer, pal: &Palette, b: Rectangle, ui_font: Font) {
+        let pal = *pal;
         let m = Metrics { cell_w: if state.cell_w > 0.0 { state.cell_w } else { self.metrics.cell_w }, ..self.metrics };
         let data = self.data;
         let pane_w = (b.width - SCROLLBAR_W) / 2.0;
@@ -219,7 +167,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for DiffView<'a, 
             let small = Metrics { size: 12.0, line_h: HEADER_H, ..m };
             for ((x, left), title) in panes.iter().zip([&data.left_title, &data.right_title]) {
                 let clip = Rectangle::new(Point::new(*x, b.y), Size::new(pane_w, HEADER_H));
-                let f = cosmic::font::default();
+                let f = ui_font;
                 let color = if *left { pal.deleted } else { pal.added };
                 r.fill_text(text_primitive(title.clone(), &small, f), Point::new(x + 10.0, b.y), color, clip);
             }
@@ -256,7 +204,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for DiffView<'a, 
                         let xb = text_x + col_to_vcol(doc, line, *b2 as usize) as f32 * m.cell_w;
                         let rect = Rectangle::new(Point::new(xa.max(text_clip.x), y), Size::new((xb - xa.max(text_clip.x)).max(0.0), m.line_h));
                         r.fill_quad(
-                            Quad { bounds: rect, border: Border { radius: 2.0.into(), ..Border::default() }, snap: true, ..Quad::default() },
+                            Quad { bounds: rect, border: Border { radius: 2.0, ..Border::default() }, ..Quad::default() },
                             alpha(base, 0.38),
                         );
                     }
@@ -290,11 +238,5 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for DiffView<'a, 
                 quad(r, Rectangle::new(Point::new(bar.x, y), Size::new(SCROLLBAR_W, 2.0)), alpha(c, 0.8));
             }
         });
-    }
-}
-
-impl<'a, Message: Clone + 'a> From<DiffView<'a, Message>> for Element<'a, Message> {
-    fn from(v: DiffView<'a, Message>) -> Self {
-        Element::new(v)
     }
 }

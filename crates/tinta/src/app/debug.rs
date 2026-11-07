@@ -4,7 +4,7 @@ use super::lsp::HoverPopup;
 use super::{App, DialogState, Focus, Message, PAction, PItem, PaletteMode, PanelView, SidebarView};
 use crate::bus;
 use crate::i18n::{tr, tr_message};
-use cosmic::app::Task;
+use crate::fx::{self, Task};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tinta_core::dap::{self, Breakpoints, Debugger, Incoming, Notice, Plan, VarRow};
@@ -86,7 +86,7 @@ impl DebugPanel {
 }
 
 impl App {
-    fn debug_problem(&mut self, message: String) -> Task<Message> {
+    fn debug_problem(&mut self, message: String) -> Task {
         let text = tr_message(&message);
         self.debug.print("stderr", &format!("{text}\n"));
         self.panel = Some(PanelView::Debug);
@@ -94,7 +94,7 @@ impl App {
     }
 
     /// F5: on with what's running, or a new session.
-    pub fn debug_start(&mut self, stop_on_entry: bool) -> Task<Message> {
+    pub fn debug_start(&mut self, stop_on_entry: bool) -> Task {
         if let Some(s) = &mut self.debug.session
             && s.is_live()
         {
@@ -143,7 +143,7 @@ impl App {
         }
     }
 
-    fn debug_launch(&mut self, plan: Result<Plan, String>) -> Task<Message> {
+    fn debug_launch(&mut self, plan: Result<Plan, String>) -> Task {
         let plan = match plan {
             Ok(p) => p,
             Err(e) => return self.debug_problem(e),
@@ -169,13 +169,13 @@ impl App {
         }
     }
 
-    pub fn debug_restart(&mut self) -> Task<Message> {
+    pub fn debug_restart(&mut self) -> Task {
         self.debug_stop();
         self.debug_start(false)
     }
 
     /// Runs a step, or begins a session paused at the start if none is running.
-    pub fn debug_step(&mut self, f: impl FnOnce(&mut Debugger)) -> Task<Message> {
+    pub fn debug_step(&mut self, f: impl FnOnce(&mut Debugger)) -> Task {
         match &mut self.debug.session {
             Some(s) if s.is_live() => {
                 f(s);
@@ -186,7 +186,7 @@ impl App {
     }
 
     /// Called now and then: some debuggers go quiet instead of saying a program couldn't start.
-    pub fn debug_tick(&mut self) -> Task<Message> {
+    pub fn debug_tick(&mut self) -> Task {
         match self.debug.session.as_mut().and_then(Debugger::check_started) {
             Some(n) => self.debug_notice(n),
             None => Task::none(),
@@ -224,7 +224,7 @@ impl App {
         Some((e.doc.path.clone()?, e.doc.char_to_line(t.cursors.head())))
     }
 
-    pub fn toggle_breakpoint_here(&mut self) -> Task<Message> {
+    pub fn toggle_breakpoint_here(&mut self) -> Task {
         match self.active_path_line() {
             Some((p, l)) => {
                 self.toggle_breakpoint_at(&p, l);
@@ -234,13 +234,12 @@ impl App {
         }
     }
 
-    pub fn start_breakpoint_condition(&mut self) -> Task<Message> {
+    pub fn start_breakpoint_condition(&mut self) -> Task {
         let Some((p, l)) = self.active_path_line() else { return self.toast(tr("Save the file first")) };
         self.dialog_input = self.debug.breakpoints.get(&p).and_then(|list| list.iter().find(|b| b.line == l)).and_then(|b| b.condition.clone()).unwrap_or_default();
         self.dialog = Some(DialogState::BreakpointCondition(p, l));
         self.focus = Focus::Input;
-        let id = cosmic::widget::Id::new(crate::ui::popups::DIALOG_INPUT);
-        Task::batch([cosmic::widget::text_input::focus(id.clone()), cosmic::widget::text_input::select_all(id)])
+        Task::batch([fx::focus(super::DIALOG_INPUT), fx::select_all(super::DIALOG_INPUT)])
     }
 
     pub fn set_breakpoint_condition(&mut self, path: PathBuf, line: usize, condition: String) {
@@ -262,7 +261,7 @@ impl App {
         }
     }
 
-    pub fn debug_configure(&mut self) -> Task<Message> {
+    pub fn debug_configure(&mut self) -> Task {
         let Some(root) = self.task_root() else { return self.toast(tr("No folder open")) };
         let path = root.join(dap::LAUNCH_PATH);
         if !path.exists() {
@@ -275,7 +274,7 @@ impl App {
         self.open_path(&path)
     }
 
-    pub fn debug_pick_config(&mut self) -> Task<Message> {
+    pub fn debug_pick_config(&mut self) -> Task {
         let Some(root) = self.task_root() else { return self.toast(tr("No folder open")) };
         let configs = match dap::load_configs(&root) {
             Ok(c) => c,
@@ -303,7 +302,7 @@ impl App {
         }
     }
 
-    pub fn on_debug(&mut self, m: DebugMsg) -> Task<Message> {
+    pub fn on_debug(&mut self, m: DebugMsg) -> Task {
         match m {
             DebugMsg::Incoming(generation, incoming) => {
                 if generation != self.debug.generation {
@@ -380,7 +379,7 @@ impl App {
         Task::none()
     }
 
-    fn debug_notice(&mut self, n: Notice) -> Task<Message> {
+    fn debug_notice(&mut self, n: Notice) -> Task {
         match n {
             Notice::Output { category, text } => {
                 self.debug.print(&category, &text);

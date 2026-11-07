@@ -3,8 +3,8 @@
 use super::{App, FindMsg, Focus, Message};
 use crate::state::TabKind;
 use crate::ui::editor_view::{EditorEvent, Geometry, PressButton};
-use cosmic::app::Task;
-use cosmic::iced::keyboard::Modifiers;
+use crate::fx::{self, Task};
+use crate::gfx::Modifiers;
 use tinta_core::commands::{self, EditOpts};
 use tinta_core::{Cursors, Selection, find};
 
@@ -35,7 +35,7 @@ impl App {
         self.want_reveal = true;
     }
 
-    pub fn type_text(&mut self, text: &str) -> Task<Message> {
+    pub fn type_text(&mut self, text: &str) -> Task {
         if !self.can_edit() {
             return Task::none();
         }
@@ -45,14 +45,14 @@ impl App {
         self.after_typing(&text)
     }
 
-    pub fn key_enter(&mut self) -> Task<Message> {
+    pub fn key_enter(&mut self) -> Task {
         let opts = self.edit_opts();
         self.edit(|d, c, _| commands::newline(d, c, opts));
         self.close_popups();
         Task::none()
     }
 
-    pub fn key_tab(&mut self, shift: bool) -> Task<Message> {
+    pub fn key_tab(&mut self, shift: bool) -> Task {
         if shift {
             self.edit(|d, c, _| commands::outdent_lines(d, c));
             return Task::none();
@@ -64,33 +64,25 @@ impl App {
         Task::none()
     }
 
-    pub fn key_backspace(&mut self) -> Task<Message> {
+    pub fn key_backspace(&mut self) -> Task {
         let opts = self.edit_opts();
         self.edit(|d, c, _| commands::backspace(d, c, opts));
         self.after_deleting()
     }
 
-    pub fn key_delete(&mut self) -> Task<Message> {
+    pub fn key_delete(&mut self) -> Task {
         self.edit(|d, c, _| commands::delete_forward(d, c));
         self.after_deleting()
     }
 
-    pub fn on_pasted(&mut self, text: Option<String>) -> Task<Message> {
+    pub fn on_pasted(&mut self, text: Option<String>) -> Task {
         let Some(text) = text else { return Task::none() };
         if self.focus == Focus::Terminal {
-            if let Some(s) = self.terms.get(self.active_term) {
-                let mut bytes = Vec::new();
-                let bracketed = s.is_bracketed_paste();
-                if bracketed {
-                    bytes.extend_from_slice(b"\x1b[200~");
-                }
-                bytes.extend_from_slice(text.replace('\n', "\r").as_bytes());
-                if bracketed {
-                    bytes.extend_from_slice(b"\x1b[201~");
-                }
-                s.write(bytes);
-            }
-            return Task::none();
+            // The terminal knows whether the program in it wants bracketed paste.
+            return match self.terms.get(self.active_term) {
+                Some(t) => Task::effect(fx::Effect::TermInput { id: t.id, text }),
+                None => Task::none(),
+            };
         }
         let text = tinta_core::buffer::normalize_newlines(&text).into_owned();
         // Text copied here keeps how it was copied: per cursor, or as whole lines.
@@ -104,10 +96,12 @@ impl App {
         Task::none()
     }
 
-    pub fn copy_selection(&mut self, cut: bool) -> Task<Message> {
+    pub fn copy_selection(&mut self, cut: bool) -> Task {
         if self.focus == Focus::Terminal {
-            let t = self.terms.get(self.active_term).and_then(|s| s.selection_text());
-            return t.map_or_else(Task::none, cosmic::iced::clipboard::write);
+            return match self.terms.get(self.active_term) {
+                Some(t) => Task::effect(fx::Effect::TermCopy(t.id)),
+                None => Task::none(),
+            };
         }
         if cut && !self.can_edit() {
             return Task::none();
@@ -121,7 +115,7 @@ impl App {
             self.want_reveal = true;
         }
         self.clip_meta = Some((joined.clone(), parts, whole));
-        cosmic::iced::clipboard::write(joined)
+        fx::clipboard_write(joined)
     }
 
     /// After anything that moves carets.
@@ -196,7 +190,7 @@ impl App {
 
     // The mouse ----------------------------------------------------------------------------
 
-    pub fn on_editor_event(&mut self, id: crate::state::TabId, ev: EditorEvent) -> Task<Message> {
+    pub fn on_editor_event(&mut self, id: crate::state::TabId, ev: EditorEvent) -> Task {
         // A click in another split makes it the active one.
         if matches!(ev, EditorEvent::Press { .. } | EditorEvent::BreakpointToggle { .. } | EditorEvent::GutterSelect { .. } | EditorEvent::FoldToggle { .. } | EditorEvent::SecondaryPress { .. }) {
             if let Some(g) = self.groups.iter().position(|g| g.active_tab() == Some(id)) {
@@ -318,7 +312,7 @@ impl App {
         }
     }
 
-    fn on_press(&mut self, id: crate::state::TabId, row: usize, vcol: usize, clicks: u8, mods: Modifiers, button: PressButton) -> Task<Message> {
+    fn on_press(&mut self, id: crate::state::TabId, row: usize, vcol: usize, clicks: u8, mods: Modifiers, button: PressButton) -> Task {
         self.close_popups();
         let Some(t) = self.tabs.get_mut(&id) else { return Task::none() };
         let Some(e) = self.docs.get_mut(&t.doc) else { return Task::none() };
@@ -468,7 +462,7 @@ impl App {
 
     // Find ---------------------------------------------------------------------------------
 
-    pub fn open_find(&mut self, replace: bool) -> Task<Message> {
+    pub fn open_find(&mut self, replace: bool) -> Task {
         self.find.open = true;
         if replace {
             self.find.replace_open = true;
@@ -482,8 +476,7 @@ impl App {
         }
         self.find.generation += 1;
         self.focus = Focus::Input;
-        let id = cosmic::widget::Id::new(FIND_INPUT);
-        Task::batch([cosmic::widget::text_input::focus(id.clone()), cosmic::widget::text_input::select_all(id)])
+        Task::batch([fx::focus(FIND_INPUT), fx::select_all(FIND_INPUT)])
     }
 
     pub fn close_find(&mut self) {
@@ -571,7 +564,7 @@ impl App {
         }
     }
 
-    pub fn on_find(&mut self, m: FindMsg) -> Task<Message> {
+    pub fn on_find(&mut self, m: FindMsg) -> Task {
         match m {
             FindMsg::Query(s) => {
                 self.find.query.pattern = s;
@@ -640,7 +633,7 @@ impl App {
         self.find_step(true);
     }
 
-    fn replace_all(&mut self) -> Task<Message> {
+    fn replace_all(&mut self) -> Task {
         self.refresh_find_matches();
         let q = self.find.query.clone();
         let Ok(re) = q.compile() else { return Task::none() };

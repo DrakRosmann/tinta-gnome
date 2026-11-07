@@ -4,7 +4,7 @@ use super::{App, DialogState, Focus, Message, PanelView};
 use crate::bus;
 use crate::i18n::tr;
 use crate::state::{DocEntry, DocId, Group, Tab, TabId, TabKind};
-use cosmic::app::Task;
+use crate::fx::{self, Task};
 use notify::Watcher;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -97,7 +97,7 @@ impl App {
         }
     }
 
-    pub fn new_scratch(&mut self) -> Task<Message> {
+    pub fn new_scratch(&mut self) -> Task {
         let mut doc = Document::new("");
         doc.indent = self.default_indent();
         let n = self.docs.values().filter(|e| e.doc.path.is_none() && !e.is_read_only_view).count() + 1;
@@ -109,7 +109,7 @@ impl App {
     }
 
     /// A read-only buffer for generated text: diffs, logs.
-    pub fn open_generated(&mut self, name: String, text: &str, language: &str) -> Task<Message> {
+    pub fn open_generated(&mut self, name: String, text: &str, language: &str) -> Task {
         let mut doc = Document::new(text);
         doc.scratch_name = name;
         doc.readonly = true;
@@ -123,7 +123,7 @@ impl App {
         self.on_active_changed()
     }
 
-    pub fn open_path(&mut self, path: &Path) -> Task<Message> {
+    pub fn open_path(&mut self, path: &Path) -> Task {
         if path.is_dir() {
             return self.open_folder(path.to_path_buf());
         }
@@ -184,7 +184,7 @@ impl App {
         self.recent_files.truncate(40);
     }
 
-    pub fn open_folder(&mut self, path: PathBuf) -> Task<Message> {
+    pub fn open_folder(&mut self, path: PathBuf) -> Task {
         let path = canonical(&path);
         self.recent_folders.retain(|p| *p != path);
         self.recent_folders.insert(0, path.clone());
@@ -201,7 +201,7 @@ impl App {
         self.update_title()
     }
 
-    pub fn close_folder(&mut self) -> Task<Message> {
+    pub fn close_folder(&mut self) -> Task {
         self.folder = None;
         self.explorer = super::Explorer::default();
         self.file_index = Arc::new(Vec::new());
@@ -221,7 +221,7 @@ impl App {
         });
     }
 
-    pub fn update_title(&mut self) -> Task<Message> {
+    pub fn update_title(&mut self) -> Task {
         let name = self.active().map(|(_, e)| {
             let dirty = if e.doc.is_dirty() && !e.is_read_only_view { "● " } else { "" };
             format!("{dirty}{}", e.doc.file_name())
@@ -236,21 +236,18 @@ impl App {
         if title == self.title {
             return Task::none();
         }
-        self.title = title.clone();
-        match self.core.main_window_id() {
-            Some(id) => self.core.set_title(Some(id), title),
-            None => Task::none(),
-        }
+        self.title = title;
+        Task::none()
     }
 
     // Saving -------------------------------------------------------------------------------
 
-    pub fn save_active(&mut self) -> Task<Message> {
+    pub fn save_active(&mut self) -> Task {
         let Some(id) = self.active_tab_id() else { return Task::none() };
         self.save_tab(id)
     }
 
-    pub fn save_tab(&mut self, id: TabId) -> Task<Message> {
+    pub fn save_tab(&mut self, id: TabId) -> Task {
         let Some(t) = self.tabs.get(&id) else { return Task::none() };
         let doc_id = t.doc;
         let Some(e) = self.docs.get(&doc_id) else { return Task::none() };
@@ -264,25 +261,13 @@ impl App {
         self.finish_save(id, path)
     }
 
-    pub fn save_as_dialog(&mut self, id: TabId) -> Task<Message> {
+    pub fn save_as_dialog(&mut self, id: TabId) -> Task {
         let name = self.tabs.get(&id).and_then(|t| self.docs.get(&t.doc)).map(|e| e.doc.file_name()).unwrap_or_default();
         let dir = self.folder.clone();
-        cosmic::task::future(async move {
-            let mut dialog = cosmic::dialog::file_chooser::save::Dialog::new().file_name(name);
-            if let Some(d) = dir {
-                dialog = dialog.directory(d);
-            }
-            match dialog.save_file().await {
-                Ok(r) => match r.url().and_then(|u| u.to_file_path().ok()) {
-                    Some(p) => Message::SaveAsTo(id, p),
-                    None => Message::Noop,
-                },
-                Err(_) => Message::Noop,
-            }
-        })
+        Task::effect(fx::Effect::SaveAs { name, folder: dir, then: Box::new(move |p| Message::SaveAsTo(id, p)) })
     }
 
-    pub fn save_tab_as(&mut self, id: TabId, path: PathBuf) -> Task<Message> {
+    pub fn save_tab_as(&mut self, id: TabId, path: PathBuf) -> Task {
         let Some(doc_id) = self.tabs.get(&id).map(|t| t.doc) else { return Task::none() };
         if let Some(e) = self.docs.get_mut(&doc_id) {
             session::remove_backup(&e.backup_key);
@@ -300,7 +285,7 @@ impl App {
     }
 
     /// The write itself, after any formatting. Applies the on-save cleanups.
-    pub fn finish_save(&mut self, id: TabId, path: PathBuf) -> Task<Message> {
+    pub fn finish_save(&mut self, id: TabId, path: PathBuf) -> Task {
         let trim = self.settings.trim_trailing_whitespace;
         let newline = self.settings.insert_final_newline;
         let Some(t) = self.tabs.get_mut(&id) else { return Task::none() };
@@ -334,7 +319,7 @@ impl App {
         }
     }
 
-    pub fn save_all_dirty_named(&mut self) -> Task<Message> {
+    pub fn save_all_dirty_named(&mut self) -> Task {
         let ids: Vec<TabId> = self
             .tabs
             .iter()
@@ -356,7 +341,7 @@ impl App {
 
     // Closing ------------------------------------------------------------------------------
 
-    pub fn request_close_tab(&mut self, id: TabId) -> Task<Message> {
+    pub fn request_close_tab(&mut self, id: TabId) -> Task {
         let Some(t) = self.tabs.get(&id) else { return Task::none() };
         let doc = t.doc;
         let other_views = self.tabs.values().filter(|o| o.doc == doc && o.id != id).count();
@@ -368,7 +353,7 @@ impl App {
         self.close_tab(id)
     }
 
-    pub fn close_tab(&mut self, id: TabId) -> Task<Message> {
+    pub fn close_tab(&mut self, id: TabId) -> Task {
         let Some(tab) = self.tabs.remove(&id) else { return Task::none() };
         let g_idx = self.groups.iter().position(|g| g.entity_of(id).is_some());
         if let Some(g_idx) = g_idx {
@@ -409,7 +394,7 @@ impl App {
         self.on_active_changed()
     }
 
-    pub fn close_tabs_where(&mut self, keep: impl Fn(TabId, &Tab) -> bool) -> Task<Message> {
+    pub fn close_tabs_where(&mut self, keep: impl Fn(TabId, &Tab) -> bool) -> Task {
         let ids: Vec<TabId> = self.tabs.iter().filter(|(k, t)| !keep(**k, t) && !t.pinned).map(|(k, _)| *k).collect();
         // Clean ones just go; the first dirty one asks, and the user can repeat.
         let mut tasks = Vec::new();
@@ -441,7 +426,7 @@ impl App {
         self.mark_session_dirty();
     }
 
-    pub fn request_quit(&mut self) -> Task<Message> {
+    pub fn request_quit(&mut self) -> Task {
         let dirty = self.docs.values().any(|e| e.doc.is_dirty() && !e.is_read_only_view);
         // A separate instance keeps no backups, so its unsaved work has to be asked about.
         if dirty && (!self.settings.hot_exit || self.new_session) {
@@ -451,9 +436,9 @@ impl App {
         self.quit_now()
     }
 
-    pub fn quit_now(&mut self) -> Task<Message> {
+    pub fn quit_now(&mut self) -> Task {
         self.persist_on_quit();
-        cosmic::iced::exit()
+        Task::effect(fx::Effect::Quit)
     }
 
     /// Only the main instance owns the session and the backups.
@@ -506,7 +491,7 @@ impl App {
         }
     }
 
-    pub fn restore(&mut self, targets: Vec<(PathBuf, Option<(usize, usize)>)>) -> Task<Message> {
+    pub fn restore(&mut self, targets: Vec<(PathBuf, Option<(usize, usize)>)>) -> Task {
         let mut tasks = Vec::new();
         let saved = (!self.new_session && self.settings.restore_session).then(Session::load).flatten();
         if let Some(s) = &saved {
@@ -571,7 +556,7 @@ impl App {
         Task::batch(tasks)
     }
 
-    fn restore_tab(&mut self, ts: &TabState) -> Task<Message> {
+    fn restore_tab(&mut self, ts: &TabState) -> Task {
         let mut task = Task::none();
         let backup = ts.backup.as_deref().and_then(session::read_backup);
         let doc_id = match &ts.path {
@@ -710,7 +695,7 @@ impl App {
         }
     }
 
-    pub fn on_fs_event(&mut self, paths: Vec<PathBuf>) -> Task<Message> {
+    pub fn on_fs_event(&mut self, paths: Vec<PathBuf>) -> Task {
         let mut tree_changed = false;
         let mut git_changed = false;
         let mut tasks = Vec::new();
@@ -757,7 +742,7 @@ impl App {
         Task::batch(tasks)
     }
 
-    pub fn reload_doc(&mut self, id: DocId) -> Task<Message> {
+    pub fn reload_doc(&mut self, id: DocId) -> Task {
         let tab = self.tabs.values_mut().find(|t| t.doc == id);
         let Some(e) = self.docs.get_mut(&id) else { return Task::none() };
         let mut c = tab.as_ref().map(|t| t.cursors.clone()).unwrap_or_default();
@@ -775,7 +760,7 @@ impl App {
 
     // After every message -------------------------------------------------------------------
 
-    pub fn after_update(&mut self) -> Task<Message> {
+    pub fn after_update(&mut self) -> Task {
         let mut tasks = Vec::new();
         let mut any_change = false;
         let doc_ids: Vec<DocId> = self.docs.keys().copied().collect();
@@ -950,7 +935,7 @@ impl App {
     }
 
     /// Runs once a second.
-    pub fn tick_slow(&mut self) -> Task<Message> {
+    pub fn tick_slow(&mut self) -> Task {
         let mut tasks = vec![self.debug_tick()];
         self.refresh_symbols();
         // Debounced git diff of the buffer against HEAD.
@@ -993,7 +978,7 @@ impl App {
         Task::batch(tasks)
     }
 
-    pub fn on_active_changed(&mut self) -> Task<Message> {
+    pub fn on_active_changed(&mut self) -> Task {
         self.close_popups();
         self.vim_reset();
         self.refresh_symbols();
@@ -1010,7 +995,7 @@ impl App {
         self.update_title()
     }
 
-    pub fn ensure_terminal(&mut self) -> Task<Message> {
+    pub fn ensure_terminal(&mut self) -> Task {
         if self.terms.is_empty() {
             return self.new_terminal();
         }
@@ -1019,22 +1004,18 @@ impl App {
         Task::none()
     }
 
-    pub fn new_terminal(&mut self) -> Task<Message> {
+    pub fn new_terminal(&mut self) -> Task {
         let id = self.new_id();
         let cwd = self
             .folder
             .clone()
             .or_else(|| self.active().and_then(|(_, e)| e.doc.path.as_deref().and_then(Path::parent).map(Path::to_path_buf)));
-        match crate::ui::terminal::Session::spawn(id, cwd, &self.settings.terminal_shell) {
-            Ok(s) => {
-                self.terms.push(s);
-                self.active_term = self.terms.len() - 1;
-                self.panel = Some(PanelView::Terminal);
-                self.focus = Focus::Terminal;
-                Task::none()
-            }
-            Err(e) => self.toast(format!("Terminal: {e}")),
-        }
+        let cwd = cwd.unwrap_or_else(|| dirs::home_dir().unwrap_or_default());
+        self.terms.push(super::TermInfo { id, title: String::new() });
+        self.active_term = self.terms.len() - 1;
+        self.panel = Some(PanelView::Terminal);
+        self.focus = Focus::Terminal;
+        Task::batch([Task::effect(fx::Effect::TermSpawn { id, cwd }), Task::effect(fx::Effect::TermFocus(id))])
     }
 
     pub fn jump_to(&mut self, line: usize, col: usize) {

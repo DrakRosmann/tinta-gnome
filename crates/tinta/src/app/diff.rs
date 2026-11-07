@@ -4,7 +4,7 @@ use super::{App, Focus, Message};
 use crate::i18n::tr;
 use crate::state::{DiffData, DocEntry, TabId, TabKind};
 use crate::ui::diff_view::DiffEvent;
-use cosmic::app::Task;
+use crate::fx::Task;
 use std::path::{Path, PathBuf};
 use tinta_core::diff::{hunk_starts, side_by_side};
 use tinta_core::{Document, git as core_git, language};
@@ -14,7 +14,7 @@ const HEADER_H: f32 = 26.0;
 
 impl App {
     /// Shows two texts side by side. `new_path` is where a double click on the right side goes.
-    pub fn open_diff(&mut self, name: String, old: (&str, String), new: (&str, String), language_of: &Path, new_path: Option<PathBuf>) -> Task<Message> {
+    pub fn open_diff(&mut self, name: String, old: (&str, String), new: (&str, String), language_of: &Path, new_path: Option<PathBuf>) -> Task {
         // Comparing the same thing again replaces the old view.
         let again: Vec<TabId> = self
             .tabs
@@ -128,7 +128,7 @@ impl App {
         true
     }
 
-    pub fn on_diff_event(&mut self, tab: TabId, ev: DiffEvent) -> Task<Message> {
+    pub fn on_diff_event(&mut self, tab: TabId, ev: DiffEvent) -> Task {
         match ev {
             DiffEvent::Viewport { w, h, cell_w } => {
                 if self.metrics.cell_w != cell_w {
@@ -174,7 +174,7 @@ impl App {
     }
 
     /// From the Source Control list: what's staged against HEAD, or the rest against what's staged.
-    pub fn open_git_diff(&mut self, root: PathBuf, rel: String, staged: bool) -> Task<Message> {
+    pub fn open_git_diff(&mut self, root: PathBuf, rel: String, staged: bool) -> Task {
         let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
         let path = root.join(&rel);
         let (old, new) = if staged {
@@ -190,7 +190,7 @@ impl App {
     }
 
     /// The active file against what's committed.
-    pub fn show_file_diff(&mut self) -> Task<Message> {
+    pub fn show_file_diff(&mut self) -> Task {
         let Some((_, e)) = self.active() else { return Task::none() };
         let Some((root, rel)) = e.git_rel.clone() else { return self.toast(tr("Not a git repository")) };
         let text = e.doc.rope.to_string();
@@ -200,7 +200,7 @@ impl App {
         self.open_diff(format!("{name} (HEAD)"), (&head, "HEAD".to_string()), (&text, tr("Working tree").to_string()), &path, Some(path.clone()))
     }
 
-    pub fn compare_with_saved(&mut self) -> Task<Message> {
+    pub fn compare_with_saved(&mut self) -> Task {
         let Some((_, e)) = self.active() else { return Task::none() };
         let Some(p) = e.doc.path.clone() else { return Task::none() };
         let now = e.doc.rope.to_string();

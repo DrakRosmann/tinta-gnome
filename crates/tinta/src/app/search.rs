@@ -3,7 +3,7 @@
 use super::{App, Focus, Message, SidebarView};
 use crate::bus;
 use crate::i18n::tr;
-use cosmic::app::Task;
+use crate::fx::{self, Task};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,7 +61,7 @@ pub enum SearchMsg {
 }
 
 impl App {
-    pub fn open_search(&mut self, replace: bool) -> Task<Message> {
+    pub fn open_search(&mut self, replace: bool) -> Task {
         self.sidebar = Some(SidebarView::Search);
         self.last_sidebar = SidebarView::Search;
         self.search.replace_open |= replace;
@@ -73,8 +73,7 @@ impl App {
             }
         }
         self.focus = Focus::Input;
-        let id = cosmic::widget::Id::new(SEARCH_INPUT);
-        Task::batch([cosmic::widget::text_input::focus(id.clone()), cosmic::widget::text_input::select_all(id)])
+        Task::batch([fx::focus(SEARCH_INPUT), fx::select_all(SEARCH_INPUT)])
     }
 
     fn run_search(&mut self) {
@@ -127,7 +126,7 @@ impl App {
         self.search.rows = rows;
     }
 
-    pub fn on_search_msg(&mut self, m: SearchMsg) -> Task<Message> {
+    pub fn on_search_msg(&mut self, m: SearchMsg) -> Task {
         match m {
             SearchMsg::Query(s) => {
                 self.search.query.pattern = s;
@@ -223,7 +222,7 @@ impl App {
     }
 
     /// Open files change in the buffer, with undo; the rest change on disk.
-    fn replace_in_files(&mut self, mut paths: Vec<PathBuf>) -> Task<Message> {
+    fn replace_in_files(&mut self, mut paths: Vec<PathBuf>) -> Task {
         self.search.replacing = false;
         let q = self.search.query.clone();
         let Ok(re) = q.compile() else { return Task::none() };

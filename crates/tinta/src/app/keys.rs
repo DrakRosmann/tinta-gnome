@@ -1,12 +1,9 @@
 //! From raw key events to commands or text.
 
 use super::{App, Focus, Message};
+use crate::fx::{self, Task};
+use crate::gfx::Modifiers;
 use crate::i18n::tr;
-use crate::ui::terminal::key_bytes;
-use cosmic::app::Task;
-use cosmic::iced::keyboard::key::{self, Named};
-use cosmic::iced::keyboard::{self, Key, Modifiers};
-use cosmic::iced::{Event, event, window};
 use tinta_core::commands::{self, Motion};
 use tinta_core::keymap::{Command, KeyResult, Stroke};
 
@@ -20,94 +17,6 @@ pub struct KeyEv {
     pub mods: Modifiers,
     pub text: Option<String>,
     pub captured: bool,
-}
-
-fn named(n: Named) -> Option<&'static str> {
-    Some(match n {
-        Named::Enter => "enter",
-        Named::Tab => "tab",
-        Named::Backspace => "backspace",
-        Named::Delete => "delete",
-        Named::Insert => "insert",
-        Named::Escape => "escape",
-        Named::ArrowUp => "up",
-        Named::ArrowDown => "down",
-        Named::ArrowLeft => "left",
-        Named::ArrowRight => "right",
-        Named::Home => "home",
-        Named::End => "end",
-        Named::PageUp => "pageup",
-        Named::PageDown => "pagedown",
-        Named::F1 => "f1",
-        Named::F2 => "f2",
-        Named::F3 => "f3",
-        Named::F4 => "f4",
-        Named::F5 => "f5",
-        Named::F6 => "f6",
-        Named::F7 => "f7",
-        Named::F8 => "f8",
-        Named::F9 => "f9",
-        Named::F10 => "f10",
-        Named::F11 => "f11",
-        Named::F12 => "f12",
-        _ => return None,
-    })
-}
-
-/// Falls back to the key's position for layouts without Latin letters, so Ctrl+C keeps working.
-fn physical_name(p: &key::Physical) -> Option<String> {
-    use key::Code as C;
-    let key::Physical::Code(code) = p else { return None };
-    let s = match code {
-        C::KeyA => "a", C::KeyB => "b", C::KeyC => "c", C::KeyD => "d", C::KeyE => "e", C::KeyF => "f",
-        C::KeyG => "g", C::KeyH => "h", C::KeyI => "i", C::KeyJ => "j", C::KeyK => "k", C::KeyL => "l",
-        C::KeyM => "m", C::KeyN => "n", C::KeyO => "o", C::KeyP => "p", C::KeyQ => "q", C::KeyR => "r",
-        C::KeyS => "s", C::KeyT => "t", C::KeyU => "u", C::KeyV => "v", C::KeyW => "w", C::KeyX => "x",
-        C::KeyY => "y", C::KeyZ => "z",
-        // Dead keys on some layouts (Brazilian ABNT2 has ´ and ~ here) still need their shortcuts.
-        C::BracketLeft => "[", C::BracketRight => "]", C::Backquote => "`", C::Quote => "'",
-        _ => return None,
-    };
-    Some(s.to_string())
-}
-
-pub fn from_event(ev: Event, status: event::Status, ) -> Option<Message> {
-    match ev {
-        Event::Keyboard(keyboard::Event::KeyPressed { key, modified_key, physical_key, modifiers, text, .. }) => {
-            let mut shifted = None;
-            let name = match &key {
-                Key::Named(n) => named(*n)?.to_string(),
-                Key::Character(c) => {
-                    let lower = c.to_lowercase();
-                    if let Key::Character(m) = &modified_key
-                        && m.to_lowercase() != lower
-                    {
-                        shifted = Some(m.to_lowercase());
-                    }
-                    if lower == " " {
-                        "space".to_string()
-                    } else if modifiers.control() && !lower.is_ascii() {
-                        physical_name(&physical_key).unwrap_or(lower)
-                    } else {
-                        lower
-                    }
-                }
-                _ => physical_name(&physical_key)?,
-            };
-            Some(Message::Key(KeyEv {
-                name,
-                shifted,
-                mods: modifiers,
-                text: text.map(|t| t.to_string()),
-                captured: status == event::Status::Captured,
-            }))
-        }
-        Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => Some(Message::Modifiers(m)),
-        Event::Window(window::Event::Focused) => Some(Message::WindowFocused(true)),
-        Event::Window(window::Event::Unfocused) => Some(Message::WindowFocused(false)),
-        Event::Window(window::Event::FileDropped(paths)) => Some(Message::Dropped(paths)),
-        _ => None,
-    }
 }
 
 fn stroke(name: &str, mods: Modifiers) -> Stroke {
@@ -127,7 +36,7 @@ fn terminal_passes(c: Command, s: &Stroke) -> bool {
 }
 
 impl App {
-    pub fn on_key(&mut self, ev: KeyEv) -> Task<Message> {
+    pub fn on_key(&mut self, ev: KeyEv) -> Task {
         // Something else took it, a text field most likely. Shortcuts with Ctrl still count,
         // since fields only claim the ones they use.
         if ev.captured {
@@ -136,14 +45,16 @@ impl App {
             let closes = ev.name == "escape" && (self.dialog.is_some() || self.find.open);
             if ev.name == "escape" && self.vim_line.take().is_some() {
                 self.focus = Focus::Editor;
-                return cosmic::widget::text_input::focus(cosmic::widget::Id::new("no-such-field"));
+                return fx::focus_editor();
             }
             if !overlay && !closes {
                 // Escape in any other field hands the keyboard back to the text.
                 if ev.name == "escape" {
                     self.focus = Focus::Editor;
-                    return cosmic::widget::text_input::focus(cosmic::widget::Id::new("no-such-field"));
+                    return fx::focus_editor();
                 }
+                // Anything else is the field's.
+                self.key_passthrough = true;
                 return Task::none();
             }
         }
@@ -210,7 +121,7 @@ impl App {
                         return self.terminal_copy();
                     }
                     if chosen.ctrl && chosen.shift && chosen.key == "v" {
-                        return cosmic::iced::clipboard::read().map(|t| cosmic::Action::App(Message::Pasted(t)));
+                        return self.terminal_paste();
                     }
                     if !was_pending && !terminal_passes(c, &chosen) {
                         return self.terminal_key(&ev);
@@ -232,7 +143,7 @@ impl App {
                         if ev.mods.control() && ev.mods.shift() {
                             match ev.name.as_str() {
                                 "c" => return self.terminal_copy(),
-                                "v" => return cosmic::iced::clipboard::read().map(|t| cosmic::Action::App(Message::Pasted(t))),
+                                "v" => return self.terminal_paste(),
                                 _ => {}
                             }
                         }
@@ -241,35 +152,37 @@ impl App {
                     // In Vim's other modes a key it passed on stops here, or it would get typed.
                     Focus::Editor if self.settings.vim_mode && !self.vim.is_insert() => Task::none(),
                     Focus::Editor => self.editor_key(&ev),
-                    Focus::Input => Task::none(),
+                    Focus::Input => {
+                        self.key_passthrough = true;
+                        Task::none()
+                    }
                 }
             }
         }
     }
 
-    fn terminal_copy(&mut self) -> Task<Message> {
-        let text = self.terms.get(self.active_term).and_then(|s| s.selection_text());
-        match text {
-            Some(t) => {
-                if let Some(s) = self.terms.get(self.active_term) {
-                    s.clear_selection();
-                }
-                cosmic::iced::clipboard::write(t)
-            }
+    fn terminal_copy(&mut self) -> Task {
+        match self.terms.get(self.active_term) {
+            Some(t) => Task::effect(fx::Effect::TermCopy(t.id)),
             None => Task::none(),
         }
     }
 
-    fn terminal_key(&mut self, ev: &KeyEv) -> Task<Message> {
-        let Some(s) = self.terms.get(self.active_term) else { return Task::none() };
-        if let Some(bytes) = key_bytes(&ev.name, ev.mods, ev.text.as_deref(), s.is_app_cursor()) {
-            s.write(bytes);
+    fn terminal_paste(&mut self) -> Task {
+        match self.terms.get(self.active_term) {
+            Some(t) => Task::effect(fx::Effect::TermPaste(t.id)),
+            None => Task::none(),
         }
+    }
+
+    /// The terminal widget takes the key itself.
+    fn terminal_key(&mut self, _ev: &KeyEv) -> Task {
+        self.key_passthrough = true;
         Task::none()
     }
 
     /// Keys with a fixed meaning in the text: the ones not worth remapping.
-    fn editor_key(&mut self, ev: &KeyEv) -> Task<Message> {
+    fn editor_key(&mut self, ev: &KeyEv) -> Task {
         if !ev.mods.control() && !ev.mods.alt() && self.diff_key(&ev.name) {
             return Task::none();
         }

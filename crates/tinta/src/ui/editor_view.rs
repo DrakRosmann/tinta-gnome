@@ -1,19 +1,14 @@
 //! The text area: gutter, text, cursors, minimap. It is a custom widget because everything in it
 //! has to line up on a character grid and repaint every frame without re-laying out text.
 
-use crate::state::{DocEntry, Metrics, Tab};
-use cosmic::iced::advanced::layout::{self, Layout};
-use cosmic::iced::advanced::renderer::{self, Quad};
-use cosmic::iced::advanced::text::{self as adv_text, Paragraph as _, Renderer as _};
-use cosmic::iced::advanced::widget::{Tree, tree};
-use cosmic::iced::advanced::{Clipboard, Renderer as _, Shell, Widget};
-use cosmic::iced::keyboard::Modifiers;
-use cosmic::iced::{
-    Border, Color, Event, Font, Length, Pixels, Point, Rectangle, Size, alignment, keyboard, mouse, window,
+use crate::gfx::{
+    Border, Color, Event, Font, FontStyle, Modifiers, Point, Quad, Rectangle, Shell, Size, Text, Weight, input_method, keyboard,
+    mouse, window,
 };
-use cosmic::iced::advanced::input_method;
-use cosmic::{Element, Renderer, Theme};
+use crate::state::{DocEntry, Metrics, Tab};
 use std::time::{Duration, Instant};
+
+type Renderer<'a> = crate::gfx::Painter<'a>;
 use tinta_core::display::{self, char_width, enclosing_headers, is_foldable};
 use tinta_core::git::LineMark;
 use tinta_core::lsp::Severity;
@@ -95,7 +90,7 @@ impl Geometry {
     }
 }
 
-/// Colours derived from the COSMIC theme, so accent changes reach the editor.
+/// Colours derived from the desktop's style, so accent changes reach the editor.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub bg: Color,
@@ -125,14 +120,10 @@ fn alpha(c: Color, a: f32) -> Color {
 }
 
 impl Palette {
-    pub fn from_theme(theme: &Theme) -> Self {
-        let t = theme.cosmic();
-        let c = |s: cosmic::cosmic_theme::palette::Srgba| Color::from(s);
-        let bg = Color { a: 1.0, ..c(t.background(false).base) };
-        let fg = Color { a: 1.0, ..c(t.background(false).on) };
-        let accent = c(t.accent.base);
-        let warning = c(t.warning.base);
-        let dark = t.is_dark;
+    /// From what the toolkit's style says: text, background, accent and the status colors.
+    pub fn new(fg: Color, bg: Color, accent: Color, success: Color, warning: Color, error: Color, dark: bool) -> Self {
+        let fg = Color { a: 1.0, ..fg };
+        let bg = Color { a: 1.0, ..bg };
         Self {
             bg,
             fg,
@@ -147,12 +138,12 @@ impl Palette {
             find: alpha(warning, 0.30),
             find_current: alpha(warning, 0.70),
             occurrence: alpha(fg, 0.11),
-            error: c(t.destructive.base),
+            error,
             warning,
             info: accent,
-            added: c(t.success.base),
+            added: success,
             modified: accent,
-            deleted: c(t.destructive.base),
+            deleted: error,
             rainbow: if dark {
                 [
                     Color::from_rgb8(0xFF, 0xD7, 0x00),
@@ -204,11 +195,11 @@ enum DragKind {
     Minimap,
 }
 
-struct State {
+pub struct State {
     drag: DragKind,
     last_click: Option<(Instant, Point, u8)>,
-    cell_w: f32,
-    measured: Option<(Font, f32)>,
+    pub cell_w: f32,
+    pub measured: Option<(Font, f32)>,
     reported: Option<(f32, f32, f32)>,
     blink_on: bool,
     next_blink: Instant,
@@ -310,28 +301,17 @@ struct RowCtx {
     clip: Rectangle,
 }
 
-pub(crate) fn text_primitive(content: String, m: &Metrics, font: Font) -> adv_text::Text<String, Font> {
-    adv_text::Text {
-        content,
-        bounds: Size::new(f32::INFINITY, m.line_h),
-        size: Pixels(m.size),
-        line_height: adv_text::LineHeight::Absolute(Pixels(m.line_h)),
-        font,
-        align_x: adv_text::Alignment::Left,
-        align_y: alignment::Vertical::Top,
-        shaping: adv_text::Shaping::Advanced,
-        wrapping: adv_text::Wrapping::None,
-        ellipsize: adv_text::Ellipsize::None,
-    }
+pub(crate) fn text_primitive(content: String, m: &Metrics, font: Font) -> Text {
+    Text { content, size: m.size, line_h: m.line_h, font }
 }
 
 fn quad(r: &mut Renderer, bounds: Rectangle, color: Color) {
-    r.fill_quad(Quad { bounds, snap: true, ..Quad::default() }, color);
+    r.fill_quad(Quad { bounds, ..Quad::default() }, color);
 }
 
 fn rquad(r: &mut Renderer, bounds: Rectangle, color: Color, radius: f32) {
     r.fill_quad(
-        Quad { bounds, border: Border { radius: radius.into(), ..Border::default() }, snap: true, ..Quad::default() },
+        Quad { bounds, border: Border { radius: radius, ..Border::default() }, ..Quad::default() },
         color,
     );
 }
@@ -424,8 +404,8 @@ impl<Message: Clone> EditorView<'_, Message> {
                 let (mut color, font) = match spans.get(span_i).filter(|s| s.start as usize <= col) {
                     Some(s) => {
                         let f = Font {
-                            weight: if s.style.bold { cosmic::iced::font::Weight::Bold } else { m.font.weight },
-                            style: if s.style.italic { cosmic::iced::font::Style::Italic } else { m.font.style },
+                            weight: if s.style.bold { Weight::Bold } else { m.font.weight },
+                            style: if s.style.italic { FontStyle::Italic } else { m.font.style },
                             ..m.font
                         };
                         (Color::from_rgb8(s.style.fg[0], s.style.fg[1], s.style.fg[2]), f)
@@ -529,56 +509,8 @@ fn unicode_is_base(c: char) -> bool {
     !matches!(c as u32, 0x300..=0x36F | 0x1AB0..=0x1AFF | 0x20D0..=0x20FF | 0xFE00..=0xFE0F | 0x200B..=0x200F)
 }
 
-impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for EditorView<'a, Message> {
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<State>()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::new(State::default())
-    }
-
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
-    }
-
-    fn layout(&mut self, tree: &mut Tree, _r: &Renderer, limits: &layout::Limits) -> layout::Node {
-        let state = tree.state.downcast_mut::<State>();
-        let key = (self.metrics.font, self.metrics.size);
-        if state.measured != Some(key) {
-            // Measure a long run: rounding on one glyph adds up across a line.
-            let sample = "M".repeat(100);
-            let p = <Renderer as adv_text::Renderer>::Paragraph::with_text(adv_text::Text {
-                content: sample.as_str(),
-                bounds: Size::INFINITE,
-                size: Pixels(self.metrics.size),
-                line_height: adv_text::LineHeight::Absolute(Pixels(self.metrics.line_h)),
-                font: self.metrics.font,
-                align_x: adv_text::Alignment::Left,
-                align_y: alignment::Vertical::Top,
-                shaping: adv_text::Shaping::Advanced,
-                wrapping: adv_text::Wrapping::None,
-                ellipsize: adv_text::Ellipsize::None,
-            });
-            state.cell_w = (p.min_bounds().width / 100.0).max(1.0);
-            state.measured = Some(key);
-        }
-        layout::Node::new(limits.max())
-    }
-
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _renderer: &Renderer,
-        _clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, Message>,
-        _viewport: &Rectangle,
-    ) {
-        let state = tree.state.downcast_mut::<State>();
-        let bounds = layout.bounds();
+impl<'a, Message: Clone + 'a> EditorView<'a, Message> {
+    pub fn update(&self, state: &mut State, event: &Event, bounds: Rectangle, cursor: mouse::Cursor, shell: &mut Shell<Message>) {
         // Tell the app the size whenever it changes; it needs it to scroll and wrap.
         let rep = (bounds.width, bounds.height, state.cell_w);
         if state.reported != Some(rep) && state.cell_w > 0.0 {
@@ -621,11 +553,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for EditorView<'a
                     let m = &self.metrics;
                     let x = bounds.x + g.text_x + v as f32 * m.cell_w - self.tab.scroll_x;
                     let y = bounds.y + row as f32 * m.line_h - self.tab.scroll_y;
-                    shell.request_input_method(&cosmic::iced::advanced::InputMethod::Enabled {
-                        cursor: Rectangle::new(Point::new(x, y), Size::new(1.0, m.line_h)),
-                        purpose: input_method::Purpose::Normal,
-                        preedit: None::<input_method::Preedit<&str>>,
-                    });
+                    shell.ime_cursor = Some(Rectangle::new(Point::new(x, y), Size::new(1.0, m.line_h)));
                 }
                 // Keep scrolling while a selection drag sits outside the text.
                 if state.drag == DragKind::Text || state.drag == DragKind::Column {
@@ -861,16 +789,7 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for EditorView<'a
         }
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _viewport: &Rectangle,
-        _renderer: &Renderer,
-    ) -> mouse::Interaction {
-        let state = tree.state.downcast_ref::<State>();
-        let bounds = layout.bounds();
+    pub fn mouse_interaction(&self, state: &State, bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Interaction {
         if matches!(state.drag, DragKind::Text | DragKind::Column) {
             return mouse::Interaction::Text;
         }
@@ -886,20 +805,9 @@ impl<'a, Message: Clone + 'a> Widget<Message, Theme, Renderer> for EditorView<'a
         }
     }
 
-    fn draw(
-        &self,
-        tree: &Tree,
-        r: &mut Renderer,
-        theme: &Theme,
-        _style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _viewport: &Rectangle,
-    ) {
-        let state = tree.state.downcast_ref::<State>();
-        let bounds = layout.bounds();
+    pub fn draw(&self, state: &State, r: &mut Renderer, pal: &Palette, bounds: Rectangle, cursor: mouse::Cursor) {
         let hover = cursor.position_over(bounds);
-        let pal = Palette::from_theme(theme);
+        let pal = *pal;
         let m = self.metrics;
         let m = Metrics { cell_w: if state.cell_w > 0.0 { state.cell_w } else { m.cell_w }, ..m };
         let view = EditorView {
@@ -1011,8 +919,8 @@ impl<Message: Clone> EditorView<'_, Message> {
                             r.fill_quad(
                                 Quad {
                                     bounds: rect,
-                                    border: Border { color: alpha(pal.fg, 0.55), width: 1.0, radius: 2.0.into() },
-                                    snap: true,
+                                    border: Border { color: alpha(pal.fg, 0.55), width: 1.0, radius: 2.0 },
+                                    
                                     ..Quad::default()
                                 },
                                 alpha(pal.accent, 0.18),
@@ -1468,8 +1376,3 @@ fn draw_diagnostics<Message: Clone>(
     }
 }
 
-impl<'a, Message: Clone + 'a> From<EditorView<'a, Message>> for Element<'a, Message> {
-    fn from(v: EditorView<'a, Message>) -> Self {
-        Element::new(v)
-    }
-}

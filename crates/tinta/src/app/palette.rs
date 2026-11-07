@@ -2,7 +2,7 @@
 
 use super::{App, Focus, KeyEv, Message};
 use crate::i18n::tr;
-use cosmic::app::Task;
+use crate::fx::{self, Task};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tinta_core::keymap::Command;
@@ -93,7 +93,7 @@ const ENCODINGS: &[(&str, &str)] = &[
 ];
 
 impl App {
-    pub fn open_palette(&mut self, mode: PaletteMode) -> Task<Message> {
+    pub fn open_palette(&mut self, mode: PaletteMode) -> Task {
         let restore = self.active().map(|(t, _)| (t.cursors.clone(), t.scroll_y));
         if mode == PaletteMode::Files && self.file_index.is_empty() && self.folder.is_some() {
             self.index_files();
@@ -111,11 +111,11 @@ impl App {
         self.close_popups();
         self.focus = Focus::Input;
         self.refilter_palette();
-        cosmic::widget::text_input::focus(cosmic::widget::Id::new(PALETTE_INPUT))
+        fx::focus(PALETTE_INPUT)
     }
 
     /// A pick list of things already known, like code actions or references.
-    pub fn open_palette_with(&mut self, mode: PaletteMode, items: Vec<PItem>, actions: Vec<tinta_core::lsp::CodeAction>) -> Task<Message> {
+    pub fn open_palette_with(&mut self, mode: PaletteMode, items: Vec<PItem>, actions: Vec<tinta_core::lsp::CodeAction>) -> Task {
         let t = self.open_palette(mode);
         if let Some(p) = &mut self.palette {
             p.locations = items.clone();
@@ -319,7 +319,7 @@ impl App {
         }
     }
 
-    fn close_palette(&mut self, cancelled: bool) -> Task<Message> {
+    fn close_palette(&mut self, cancelled: bool) -> Task {
         let Some(p) = self.palette.take() else { return Task::none() };
         self.focus = Focus::Editor;
         if cancelled {
@@ -339,7 +339,7 @@ impl App {
         Task::none()
     }
 
-    pub fn palette_key(&mut self, ev: &KeyEv) -> Task<Message> {
+    pub fn palette_key(&mut self, ev: &KeyEv) -> Task {
         let Some(p) = &mut self.palette else { return Task::none() };
         let n = p.items.len();
         match ev.name.as_str() {
@@ -355,7 +355,7 @@ impl App {
         Task::none()
     }
 
-    fn palette_accept(&mut self) -> Task<Message> {
+    fn palette_accept(&mut self) -> Task {
         let Some(p) = &self.palette else { return Task::none() };
         let Some(item) = p.items.get(p.selected).cloned() else {
             return self.close_palette(true);
@@ -448,7 +448,7 @@ impl App {
         }
     }
 
-    pub fn on_palette(&mut self, m: PaletteMsg) -> Task<Message> {
+    pub fn on_palette(&mut self, m: PaletteMsg) -> Task {
         match m {
             PaletteMsg::Input(s) => {
                 let Some(p) = &mut self.palette else { return Task::none() };

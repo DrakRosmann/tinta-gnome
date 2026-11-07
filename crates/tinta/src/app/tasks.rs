@@ -4,7 +4,7 @@ use super::{App, Message, PAction, PItem, PaletteMode, PanelView};
 use crate::bus;
 use crate::i18n::tr;
 use crate::state::Diag;
-use cosmic::app::Task as AppTask;
+use crate::fx::Task as AppTask;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -85,7 +85,7 @@ impl App {
         self.folder.clone().or_else(|| self.active().and_then(|(_, e)| e.doc.path.as_deref().and_then(Path::parent).map(Path::to_path_buf)))
     }
 
-    pub fn run_task_picker(&mut self) -> AppTask<Message> {
+    pub fn run_task_picker(&mut self) -> AppTask {
         let Some(root) = self.task_root() else { return self.toast(tr("No folder open")) };
         let (list, problem) = tasks::detect(&root);
         if let Some(p) = problem {
@@ -107,7 +107,7 @@ impl App {
         self.open_palette_with(PaletteMode::Locations, items, Vec::new())
     }
 
-    pub fn run_default_build(&mut self) -> AppTask<Message> {
+    pub fn run_default_build(&mut self) -> AppTask {
         let Some(root) = self.task_root() else { return self.toast(tr("No folder open")) };
         let (list, _) = tasks::detect(&root);
         match tasks::default_build(&list).cloned() {
@@ -116,7 +116,7 @@ impl App {
         }
     }
 
-    pub fn rerun_task(&mut self) -> AppTask<Message> {
+    pub fn rerun_task(&mut self) -> AppTask {
         match self.tasks.last.clone() {
             Some(t) => self.run_task(t),
             None => self.run_default_build(),
@@ -130,7 +130,7 @@ impl App {
         }
     }
 
-    pub fn run_task(&mut self, task: Task) -> AppTask<Message> {
+    pub fn run_task(&mut self, task: Task) -> AppTask {
         self.stop_task();
         let Some(root) = self.task_root() else { return AppTask::none() };
         let save = self.save_all_dirty_named();
@@ -232,7 +232,7 @@ impl App {
         }
     }
 
-    pub fn on_task(&mut self, m: TaskMsg) -> AppTask<Message> {
+    pub fn on_task(&mut self, m: TaskMsg) -> AppTask {
         match m {
             TaskMsg::Lines(g, lines) => {
                 if g != self.tasks.generation {
@@ -283,7 +283,7 @@ impl App {
         }
     }
 
-    pub fn open_at(&mut self, path: &Path, line: usize, col: usize) -> AppTask<Message> {
+    pub fn open_at(&mut self, path: &Path, line: usize, col: usize) -> AppTask {
         self.push_nav();
         let t = self.open_path(path);
         self.jump_to(line, col);
@@ -291,7 +291,7 @@ impl App {
         t
     }
 
-    pub fn task_problem_step(&mut self, forward: bool) -> AppTask<Message> {
+    pub fn task_problem_step(&mut self, forward: bool) -> AppTask {
         let n = self.tasks.problems.len();
         if n == 0 {
             return AppTask::none();
@@ -310,7 +310,7 @@ impl App {
     }
 
     /// Ctrl+click in the terminal.
-    pub fn on_term_link(&mut self, text: String, col: usize) -> AppTask<Message> {
+    pub fn on_term_link(&mut self, text: String, col: usize) -> AppTask {
         if let Some(url) = tasks::url_at(&text, col) {
             let _ = open::that_detached(url);
             return AppTask::none();

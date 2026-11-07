@@ -4,7 +4,7 @@ use super::{App, DialogState, Focus, Message, PAction, PItem, PaletteMode};
 use crate::bus;
 use crate::i18n::tr;
 use crate::state::{Diag, DocId, TabId};
-use cosmic::app::Task;
+use crate::fx::Task;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -99,7 +99,7 @@ impl App {
     }
 
     /// Starts the language's server if needed and tells it about the document.
-    pub fn lsp_open_doc(&mut self, doc: DocId) -> Task<Message> {
+    pub fn lsp_open_doc(&mut self, doc: DocId) -> Task {
         if !self.settings.lsp_enabled {
             return Task::none();
         }
@@ -183,7 +183,7 @@ impl App {
         }
     }
 
-    pub fn restart_lsp(&mut self) -> Task<Message> {
+    pub fn restart_lsp(&mut self) -> Task {
         let Some((_, e)) = self.active() else { return Task::none() };
         let Some(k) = e.lsp_key.clone() else { return self.toast(tr("No language server for this file")) };
         self.lsp.remove(&k);
@@ -216,7 +216,7 @@ impl App {
 
     // Requests -----------------------------------------------------------------------------
 
-    pub fn request_hover(&mut self, tab: TabId, row: usize, vcol: usize) -> Task<Message> {
+    pub fn request_hover(&mut self, tab: TabId, row: usize, vcol: usize) -> Task {
         let Some(t) = self.tabs.get(&tab) else { return Task::none() };
         let Some(e) = self.docs.get(&t.doc) else { return Task::none() };
         if self.palette.is_some() || self.completion.is_some() {
@@ -262,21 +262,21 @@ impl App {
         Task::none()
     }
 
-    pub fn hover_at_caret(&mut self) -> Task<Message> {
+    pub fn hover_at_caret(&mut self) -> Task {
         let Some((doc, path, head, key)) = self.with_server() else { return Task::none() };
         let id = self.lsp[&key].client.hover(&path, &self.docs[&doc].doc.rope, head);
         self.register(&key, id, Pending::Hover { pos: head });
         Task::none()
     }
 
-    pub fn request_signature(&mut self) -> Task<Message> {
+    pub fn request_signature(&mut self) -> Task {
         let Some((doc, path, head, key)) = self.with_server() else { return Task::none() };
         let id = self.lsp[&key].client.signature(&path, &self.docs[&doc].doc.rope, head);
         self.register(&key, id, Pending::Signature);
         Task::none()
     }
 
-    pub fn go_to_location(&mut self, method: &str) -> Task<Message> {
+    pub fn go_to_location(&mut self, method: &str) -> Task {
         let Some((doc, path, head, key)) = self.with_server() else {
             return self.toast(tr("No language server for this file"));
         };
@@ -285,7 +285,7 @@ impl App {
         Task::none()
     }
 
-    pub fn find_references(&mut self) -> Task<Message> {
+    pub fn find_references(&mut self) -> Task {
         let Some((doc, path, head, key)) = self.with_server() else {
             return self.toast(tr("No language server for this file"));
         };
@@ -294,7 +294,7 @@ impl App {
         Task::none()
     }
 
-    pub fn start_rename(&mut self) -> Task<Message> {
+    pub fn start_rename(&mut self) -> Task {
         let Some((t, e)) = self.active() else { return Task::none() };
         if e.lsp_key.is_none() {
             return self.toast(tr("No language server for this file"));
@@ -308,7 +308,7 @@ impl App {
         super::explorer::dialog_focus()
     }
 
-    pub fn do_rename(&mut self, new_name: String) -> Task<Message> {
+    pub fn do_rename(&mut self, new_name: String) -> Task {
         if new_name.trim().is_empty() {
             return Task::none();
         }
@@ -318,7 +318,7 @@ impl App {
         Task::none()
     }
 
-    pub fn format_document(&mut self) -> Task<Message> {
+    pub fn format_document(&mut self) -> Task {
         let Some((doc, path, _, key)) = self.with_server() else {
             return self.toast(tr("No language server for this file"));
         };
@@ -340,7 +340,7 @@ impl App {
         true
     }
 
-    pub fn request_code_actions(&mut self) -> Task<Message> {
+    pub fn request_code_actions(&mut self) -> Task {
         let Some((doc, path, _, key)) = self.with_server() else {
             return self.toast(tr("No language server for this file"));
         };
@@ -353,7 +353,7 @@ impl App {
         Task::none()
     }
 
-    pub fn run_code_action(&mut self, action: core_lsp::CodeAction) -> Task<Message> {
+    pub fn run_code_action(&mut self, action: core_lsp::CodeAction) -> Task {
         let key = self.active().and_then(|(_, e)| e.lsp_key.clone());
         if let Some(edit) = &action.edit {
             self.apply_workspace_edit(edit);
@@ -382,7 +382,7 @@ impl App {
     // Completion ---------------------------------------------------------------------------
 
     /// Called after typing. Opens suggestions when the text calls for them.
-    pub fn after_typing(&mut self, text: &str) -> Task<Message> {
+    pub fn after_typing(&mut self, text: &str) -> Task {
         let Some(ch) = text.chars().last() else { return Task::none() };
         let doc = self.active().map(|(t, _)| t.doc);
         // Signature help follows parentheses.
@@ -432,14 +432,14 @@ impl App {
         Task::none()
     }
 
-    pub fn after_deleting(&mut self) -> Task<Message> {
+    pub fn after_deleting(&mut self) -> Task {
         if self.completion.is_some() {
             self.refilter_completion();
         }
         Task::none()
     }
 
-    pub fn trigger_completion(&mut self, trigger: Option<String>) -> Task<Message> {
+    pub fn trigger_completion(&mut self, trigger: Option<String>) -> Task {
         let settings_word = self.settings.word_completion;
         let settings_snip = self.settings.snippets;
         let Some(tab_id) = self.active_tab_id() else { return Task::none() };
@@ -526,7 +526,7 @@ impl App {
         }
     }
 
-    pub fn completion_move(&mut self, d: i32) -> Task<Message> {
+    pub fn completion_move(&mut self, d: i32) -> Task {
         if let Some(c) = &mut self.completion {
             let n = c.visible.len() as i32;
             if n > 0 {
@@ -537,7 +537,7 @@ impl App {
         Task::none()
     }
 
-    pub fn accept_completion(&mut self) -> Task<Message> {
+    pub fn accept_completion(&mut self) -> Task {
         let Some(c) = self.completion.take() else { return Task::none() };
         let Some(entry) = c.visible.get(c.selected).and_then(|i| c.entries.get(*i)).cloned() else { return Task::none() };
         match entry.source {
@@ -720,7 +720,7 @@ impl App {
 
     // What comes back ----------------------------------------------------------------------
 
-    pub fn on_lsp_event(&mut self, ev: Event) -> Task<Message> {
+    pub fn on_lsp_event(&mut self, ev: Event) -> Task {
         match ev {
             Event::Ready { server, capabilities } => {
                 let mut opened = Vec::new();
@@ -810,7 +810,7 @@ impl App {
         }
     }
 
-    fn on_reply(&mut self, pending: Pending, reply: Reply) -> Task<Message> {
+    fn on_reply(&mut self, pending: Pending, reply: Reply) -> Task {
         if let Reply::Error(e) = &reply {
             self.output.push(format!("LSP: {e}"));
             // A save waiting on the formatter still has to happen.
@@ -921,7 +921,7 @@ impl App {
         Task::none()
     }
 
-    fn open_location(&mut self, path: PathBuf, at: core_lsp::Pos) -> Task<Message> {
+    fn open_location(&mut self, path: PathBuf, at: core_lsp::Pos) -> Task {
         self.push_nav();
         let t = self.open_path(&path);
         if let Some((tab, e)) = self.active_mut() {
@@ -934,7 +934,7 @@ impl App {
         t
     }
 
-    fn show_locations(&mut self, list: Vec<core_lsp::Location>) -> Task<Message> {
+    fn show_locations(&mut self, list: Vec<core_lsp::Location>) -> Task {
         let items = list
             .iter()
             .map(|l| {

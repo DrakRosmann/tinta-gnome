@@ -1,7 +1,6 @@
 //! The editor's model: documents, the tabs that show them and everything hanging off each.
 
-use cosmic::iced::Font;
-use cosmic::widget::segmented_button;
+use crate::gfx::Font;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use tinta_core::git::LineDiff;
@@ -181,14 +180,108 @@ impl Tab {
     }
 }
 
+/// The tabs of one split, in order, and which one shows. Tabs are known by their own id.
+pub type Entity = TabId;
+
+/// No tab: what `active` gives when the group is empty.
+pub const NO_TAB: Entity = u64::MAX;
+
+#[derive(Debug, Default, Clone)]
+pub struct TabModel {
+    items: Vec<(TabId, String)>,
+    active: Option<TabId>,
+}
+
+pub struct TabBuilder<'a> {
+    model: &'a mut TabModel,
+    text: String,
+    id: Option<TabId>,
+}
+
+impl TabBuilder<'_> {
+    pub fn text(mut self, t: String) -> Self {
+        self.text = t;
+        self
+    }
+    pub fn data<T>(mut self, id: TabId) -> Self {
+        self.id = Some(id);
+        self
+    }
+    pub fn closable(self) -> Self {
+        self
+    }
+    /// Adds the tab after the active one, as editors do, and shows it.
+    pub fn activate(self) {
+        let Some(id) = self.id else { return };
+        let at = self.model.active.and_then(|a| self.model.items.iter().position(|(t, _)| *t == a)).map_or(self.model.items.len(), |i| i + 1);
+        self.model.items.insert(at, (id, self.text));
+        self.model.active = Some(id);
+    }
+}
+
+impl TabModel {
+    pub fn insert(&mut self) -> TabBuilder<'_> {
+        TabBuilder { model: self, text: String::new(), id: None }
+    }
+    pub fn text(&self, e: Entity) -> Option<&str> {
+        self.items.iter().find(|(t, _)| *t == e).map(|(_, s)| s.as_str())
+    }
+    pub fn text_set(&mut self, e: Entity, text: String) {
+        if let Some(item) = self.items.iter_mut().find(|(t, _)| *t == e) {
+            item.1 = text;
+        }
+    }
+    pub fn activate(&mut self, e: Entity) {
+        if self.items.iter().any(|(t, _)| *t == e) {
+            self.active = Some(e);
+        }
+    }
+    pub fn active(&self) -> Entity {
+        self.active.unwrap_or(NO_TAB)
+    }
+    pub fn position(&self, e: Entity) -> Option<u16> {
+        self.items.iter().position(|(t, _)| *t == e).map(|i| i as u16)
+    }
+    pub fn position_set(&mut self, e: Entity, pos: u16) {
+        if let Some(i) = self.items.iter().position(|(t, _)| *t == e) {
+            let item = self.items.remove(i);
+            let at = (pos as usize).min(self.items.len());
+            self.items.insert(at, item);
+        }
+    }
+    pub fn remove(&mut self, e: Entity) {
+        self.items.retain(|(t, _)| *t != e);
+        if self.active == Some(e) {
+            self.active = None;
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+    pub fn activate_position(&mut self, pos: u16) {
+        if let Some((t, _)) = self.items.get(pos as usize) {
+            self.active = Some(*t);
+        }
+    }
+    pub fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.items.iter().map(|(t, _)| *t)
+    }
+    pub fn data<T>(&self, e: Entity) -> Option<&TabId> {
+        self.items.iter().find(|(t, _)| *t == e).map(|(t, _)| t)
+    }
+}
+
 pub struct Group {
-    pub model: segmented_button::SingleSelectModel,
+    pub model: TabModel,
     pub weight: f32,
 }
 
 impl Group {
     pub fn new() -> Self {
-        Self { model: segmented_button::Model::default(), weight: 1.0 }
+        Self { model: TabModel::default(), weight: 1.0 }
     }
 
     pub fn active_tab(&self) -> Option<TabId> {
@@ -196,11 +289,11 @@ impl Group {
     }
 
     pub fn tabs(&self) -> Vec<TabId> {
-        self.model.iter().filter_map(|e| self.model.data::<TabId>(e).copied()).collect()
+        self.model.iter().collect()
     }
 
-    pub fn entity_of(&self, tab: TabId) -> Option<segmented_button::Entity> {
-        self.model.iter().find(|e| self.model.data::<TabId>(*e) == Some(&tab))
+    pub fn entity_of(&self, tab: TabId) -> Option<Entity> {
+        self.model.iter().find(|e| *e == tab)
     }
 }
 
@@ -240,7 +333,7 @@ pub fn mono_font(family: &str) -> Font {
         }
     };
     Font {
-        family: cosmic::iced::font::Family::Name(name),
+        family: name,
         ..Font::MONOSPACE
     }
 }

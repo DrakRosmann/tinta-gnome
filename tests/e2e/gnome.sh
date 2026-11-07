@@ -42,7 +42,7 @@ if [ -n "\${GNOME_SHOT:-}" ]; then
           --method org.gnome.Shell.Screenshot.Screenshot false false "\${GNOME_SHOT#*:}" > "$work/shot.log" 2>&1 ) &
 fi
 XDG_CURRENT_DESKTOP=GNOME WAYLAND_DISPLAY=$display TINTA_SCRIPT="$script" \\
-    timeout "\${TINTA_TIMEOUT:-60}" "$root/target/debug/tinta-gnome" "\$@" > "$work/app.log" 2>&1
+    timeout "\${TINTA_TIMEOUT:-60}" "${TINTA_APP:-$root/target/debug/tinta-gnome}" "\$@" > "$work/app.log" 2>&1
 status=\$?
 kill \$shell 2>/dev/null
 wait \$shell 2>/dev/null

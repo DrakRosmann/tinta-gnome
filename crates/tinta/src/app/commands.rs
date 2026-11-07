@@ -2,7 +2,7 @@
 
 use super::{App, BoolSetting, DialogMsg, DialogState, Focus, Message, PaletteMode, PanelView, SettingMsg, SidebarView};
 use crate::state::{TabId, TabKind};
-use cosmic::app::Task;
+use crate::fx::{self, Task};
 use std::path::PathBuf;
 use tinta_core::buffer::LineEnding;
 use tinta_core::commands::{self as cmds, LineOp};
@@ -11,7 +11,7 @@ use tinta_core::settings::{self, LineNumbers, Settings, Whitespace};
 use tinta_core::{Selection, display, git as core_git};
 
 impl App {
-    pub fn run(&mut self, c: Command) -> Task<Message> {
+    pub fn run(&mut self, c: Command) -> Task {
         use Command as C;
         match c {
             C::NewFile => return self.new_scratch(),
@@ -79,7 +79,7 @@ impl App {
             }
             C::Cut => return self.copy_selection(true),
             C::Copy => return self.copy_selection(false),
-            C::Paste => return cosmic::iced::clipboard::read().map(|t| cosmic::Action::App(Message::Pasted(t))),
+            C::Paste => return fx::clipboard_read(Message::Pasted),
             C::DeleteLine => self.edit(|d, c, _| cmds::delete_lines(d, c)),
             C::DuplicateSelection => self.edit(|d, c, _| cmds::duplicate(d, c)),
             C::CopyLineDown => self.edit(|d, c, _| cmds::copy_lines(d, c, true)),
@@ -359,7 +359,6 @@ impl App {
             }
             C::ToggleZen => {
                 self.zen = !self.zen;
-                self.core.window.show_headerbar = !self.zen;
                 return self.set_fullscreen(self.zen);
             }
             C::ZoomIn => self.zoom(1.0),
@@ -427,18 +426,17 @@ impl App {
             }
             C::CopyPath => {
                 if let Some(p) = self.active().and_then(|(_, e)| e.doc.path.clone()) {
-                    return cosmic::iced::clipboard::write(p.display().to_string());
+                    return fx::clipboard_write(p.display().to_string());
                 }
             }
             C::CopyRelativePath => {
                 if let Some(p) = self.active().and_then(|(_, e)| e.doc.path.clone()) {
                     let rel = self.folder.as_ref().and_then(|f| p.strip_prefix(f).ok()).unwrap_or(&p);
-                    return cosmic::iced::clipboard::write(rel.display().to_string());
+                    return fx::clipboard_write(rel.display().to_string());
                 }
             }
             C::OpenSettings => {
                 self.settings_open = !self.settings_open;
-                self.core.window.show_context = self.settings_open;
             }
             C::OpenSettingsJson => return self.open_config(settings::settings_path(), "settings"),
             C::OpenKeybindings => return self.open_config(settings::keybindings_path(), "keys"),
@@ -452,10 +450,8 @@ impl App {
         Task::none()
     }
 
-    fn set_fullscreen(&self, on: bool) -> Task<Message> {
-        let Some(id) = self.core.main_window_id() else { return Task::none() };
-        let mode = if on { cosmic::iced::window::Mode::Fullscreen } else { cosmic::iced::window::Mode::Windowed };
-        cosmic::iced::window::set_mode(id, mode)
+    fn set_fullscreen(&self, on: bool) -> Task {
+        Task::effect(fx::Effect::Fullscreen(on))
     }
 
     fn select_op(&mut self, f: impl FnOnce(&tinta_core::Document, &mut tinta_core::Cursors, &tinta_core::DisplayMap)) {
@@ -466,7 +462,7 @@ impl App {
         self.after_caret_move();
     }
 
-    fn cycle_tab(&mut self, d: i32) -> Task<Message> {
+    fn cycle_tab(&mut self, d: i32) -> Task {
         let g = &mut self.groups[self.active_group];
         let n = g.model.len() as i32;
         if n < 2 {
@@ -490,7 +486,7 @@ impl App {
         self.mark_session_dirty();
     }
 
-    fn focus_group(&mut self, d: i32) -> Task<Message> {
+    fn focus_group(&mut self, d: i32) -> Task {
         let n = self.groups.len() as i32;
         self.active_group = (self.active_group as i32 + d).rem_euclid(n) as usize;
         self.focus = Focus::Editor;
@@ -512,7 +508,7 @@ impl App {
         }
     }
 
-    fn nav_step(&mut self, back: bool) -> Task<Message> {
+    fn nav_step(&mut self, back: bool) -> Task {
         let current = self.active().and_then(|(t, e)| e.doc.path.clone().map(|p| (p, t.cursors.head())));
         let target = if back { self.nav_back.pop() } else { self.nav_forward.pop() };
         let Some((path, pos)) = target else { return Task::none() };
@@ -678,7 +674,7 @@ impl App {
         }
     }
 
-    fn open_config(&mut self, path: PathBuf, kind: &str) -> Task<Message> {
+    fn open_config(&mut self, path: PathBuf, kind: &str) -> Task {
         if !path.exists() {
             let _ = std::fs::create_dir_all(settings::config_dir());
             let body = match kind {
@@ -703,7 +699,7 @@ impl App {
         self.settings_mtime = super::file_mtime(&settings::settings_path());
     }
 
-    pub fn reload_config_files(&mut self) -> Task<Message> {
+    pub fn reload_config_files(&mut self) -> Task {
         let mut tasks = Vec::new();
         self.settings_mtime = super::file_mtime(&settings::settings_path());
         self.keymap_mtime = super::file_mtime(&settings::keybindings_path());
@@ -731,10 +727,10 @@ impl App {
         Task::batch(tasks)
     }
 
-    pub fn on_setting(&mut self, m: SettingMsg) -> Task<Message> {
+    pub fn on_setting(&mut self, m: SettingMsg) -> Task {
         let mut extra = Task::none();
         match m {
-            SettingMsg::InterfaceStyle(style) => return self.set_interface_style(style),
+            SettingMsg::InterfaceStyle(_) => {}
             SettingMsg::UiTheme(t) => {
                 self.settings.ui_theme = t;
                 extra = self.apply_ui_theme();
@@ -807,7 +803,7 @@ impl App {
         extra
     }
 
-    pub fn on_dialog(&mut self, m: DialogMsg) -> Task<Message> {
+    pub fn on_dialog(&mut self, m: DialogMsg) -> Task {
         match m {
             DialogMsg::Input(s) => {
                 self.dialog_input = s;
@@ -865,7 +861,7 @@ impl App {
         }
     }
 
-    fn save_then_close(&mut self, id: TabId) -> Task<Message> {
+    fn save_then_close(&mut self, id: TabId) -> Task {
         let t = self.save_tab(id);
         // Untitled buffers go through the save dialog first and stay open until it answers.
         let named = self.tabs.get(&id).and_then(|t| self.docs.get(&t.doc)).is_some_and(|e| e.doc.path.is_some());
@@ -876,7 +872,7 @@ impl App {
         t
     }
 
-    pub fn toggle_sidebar_view(&mut self, v: SidebarView) -> Task<Message> {
+    pub fn toggle_sidebar_view(&mut self, v: SidebarView) -> Task {
         if self.sidebar == Some(v) {
             self.sidebar = None;
             return Task::none();
@@ -884,7 +880,7 @@ impl App {
         self.show_sidebar(v)
     }
 
-    pub fn show_sidebar(&mut self, v: SidebarView) -> Task<Message> {
+    pub fn show_sidebar(&mut self, v: SidebarView) -> Task {
         self.sidebar = Some(v);
         self.last_sidebar = v;
         self.mark_session_dirty();
@@ -902,7 +898,7 @@ impl App {
         self.signature = None;
     }
 
-    pub fn on_escape_key(&mut self) -> Task<Message> {
+    pub fn on_escape_key(&mut self) -> Task {
         if self.completion.is_some() || self.hover.is_some() || self.signature.is_some() {
             self.close_popups();
             return Task::none();
@@ -913,17 +909,10 @@ impl App {
         }
         if self.settings_open {
             self.settings_open = false;
-            self.core.window.show_context = false;
             return Task::none();
         }
         if self.zen {
             return self.run(Command::ToggleZen);
-        }
-        if self.focus == Focus::Terminal
-            && let Some(s) = self.terms.get(self.active_term)
-        {
-            s.write(vec![0x1b]);
-            return Task::none();
         }
         if let Some((t, _)) = self.active_mut() {
             t.snippet = None;
@@ -939,7 +928,7 @@ impl App {
         Task::none()
     }
 
-    fn create_file(&mut self, dir: PathBuf, name: &str) -> Task<Message> {
+    fn create_file(&mut self, dir: PathBuf, name: &str) -> Task {
         if name.trim().is_empty() {
             return Task::none();
         }
@@ -956,7 +945,7 @@ impl App {
         self.open_path(&path)
     }
 
-    fn create_folder(&mut self, dir: PathBuf, name: &str) -> Task<Message> {
+    fn create_folder(&mut self, dir: PathBuf, name: &str) -> Task {
         if name.trim().is_empty() {
             return Task::none();
         }
@@ -968,7 +957,7 @@ impl App {
         Task::none()
     }
 
-    fn rename_path(&mut self, from: PathBuf, name: &str) -> Task<Message> {
+    fn rename_path(&mut self, from: PathBuf, name: &str) -> Task {
         if name.trim().is_empty() {
             return Task::none();
         }
@@ -987,7 +976,7 @@ impl App {
         Task::none()
     }
 
-    fn trash_path(&mut self, p: PathBuf) -> Task<Message> {
+    fn trash_path(&mut self, p: PathBuf) -> Task {
         if let Err(e) = trash::delete(&p) {
             return self.toast(e.to_string());
         }
@@ -1002,27 +991,10 @@ impl App {
     }
 }
 
-fn open_file_dialog(dir: Option<PathBuf>) -> Task<Message> {
-    cosmic::task::future(async move {
-        let mut d = cosmic::dialog::file_chooser::open::Dialog::new();
-        if let Some(dir) = dir {
-            d = d.directory(dir);
-        }
-        match d.open_files().await {
-            Ok(r) => Message::OpenFiles(r.urls().iter().filter_map(|u| u.to_file_path().ok()).collect()),
-            Err(_) => Message::Noop,
-        }
-    })
+fn open_file_dialog(_dir: Option<PathBuf>) -> Task {
+    Task::effect(fx::Effect::OpenFiles(Box::new(Message::OpenFiles)))
 }
 
-fn open_folder_dialog() -> Task<Message> {
-    cosmic::task::future(async move {
-        match cosmic::dialog::file_chooser::open::Dialog::new().open_folder().await {
-            Ok(r) => match r.url().to_file_path() {
-                Ok(p) => Message::OpenFolderPath(p),
-                Err(()) => Message::Noop,
-            },
-            Err(_) => Message::Noop,
-        }
-    })
+fn open_folder_dialog() -> Task {
+    Task::effect(fx::Effect::OpenFolder(Box::new(Message::OpenFolderPath)))
 }
