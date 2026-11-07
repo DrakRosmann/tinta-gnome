@@ -2,7 +2,7 @@
 
 use super::Shell;
 use super::rows::{self, RowList};
-use crate::app::{App, ExplorerMsg, GitMsg, Message, RowAction, SEARCH_INPUT, SearchMsg, SearchRow, SidebarView};
+use crate::app::{App, ExplorerMsg, Focus, GitMsg, Message, RowAction, SEARCH_INPUT, SearchMsg, SearchRow, SidebarView};
 use crate::i18n::tr;
 use crate::state::{DocEntry, Tab};
 use adw::prelude::*;
@@ -43,6 +43,8 @@ pub struct Sidebar {
 struct Last {
     view: Option<SidebarView>,
     git: u64,
+    /// The tree's keyboard row last scrolled to and focused.
+    explorer_cursor: Option<usize>,
 }
 
 fn view_name(v: SidebarView) -> &'static str {
@@ -211,6 +213,9 @@ impl Sidebar {
             let active = app.active().and_then(|(_, d)| d.doc.path.as_ref()) == Some(&r.path);
             if active {
                 name.add_css_class("heading");
+            }
+            if app.focus == Focus::Explorer && app.explorer.selected.as_ref() == Some(&r.path) {
+                b.add_css_class("tinta-cursor");
             }
             b.append(&name);
             if let Some(m) = r.git.filter(|_| !r.is_dir) {
@@ -498,8 +503,18 @@ impl Sidebar {
                 let name = app.folder.as_ref().and_then(|f| f.file_name()).map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| tr("Explorer").to_string());
                 self.explorer_title.set_label(&name);
                 let active = app.active().and_then(|(_, d)| d.doc.path.clone());
-                let key = rows::hash_of((e.rows.iter().map(|r| (&r.path, r.expanded, r.git, r.ignored)).collect::<Vec<_>>(), active));
-                self.explorer.set(e.rows.len(), key);
+                let keyboard = app.focus == Focus::Explorer;
+                let key = rows::hash_of((e.rows.iter().map(|r| (&r.path, r.expanded, r.git, r.ignored)).collect::<Vec<_>>(), active, keyboard, &e.selected));
+                let rebuilt = self.explorer.set(e.rows.len(), key);
+                // The keyboard's row stays in view and holds GTK's focus, which a rebuilt list drops.
+                let cursor = keyboard.then(|| e.selected.as_ref().and_then(|p| e.rows.iter().position(|r| r.path == *p)).unwrap_or(0)).filter(|_| !e.rows.is_empty());
+                if cursor != last.explorer_cursor || (rebuilt && cursor.is_some()) {
+                    if let Some(i) = cursor {
+                        let view = self.explorer.view.clone();
+                        glib::idle_add_local_once(move || view.scroll_to(i as u32, gtk::ListScrollFlags::FOCUS, None));
+                    }
+                    last.explorer_cursor = cursor;
+                }
             }
             SidebarView::Search => {
                 let s = &app.search;

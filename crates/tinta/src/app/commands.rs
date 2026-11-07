@@ -239,7 +239,14 @@ impl App {
                 };
                 self.mark_session_dirty();
             }
-            C::ShowExplorer => return self.show_sidebar(SidebarView::Explorer),
+            // The tree takes the keyboard, as it does in other editors.
+            C::ShowExplorer => {
+                let t = self.show_sidebar(SidebarView::Explorer);
+                if self.folder.is_some() {
+                    self.focus = Focus::Explorer;
+                }
+                return t;
+            }
             C::ShowSearch => return self.open_search(false),
             C::ShowGit => return self.show_sidebar(SidebarView::Git),
             C::ShowOutline => return self.show_sidebar(SidebarView::Outline),

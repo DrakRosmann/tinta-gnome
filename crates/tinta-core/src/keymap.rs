@@ -154,7 +154,7 @@ commands! {
     PrevDiagnostic, "diag.prev", "Previous Problem", "Problema anterior", ["shift+f4"];
     // View
     ToggleSidebar, "view.sidebar", "Toggle Sidebar", "Mostrar/ocultar barra lateral", ["ctrl+b"];
-    ShowExplorer, "view.explorer", "Show Explorer", "Mostrar explorador", [];
+    ShowExplorer, "view.explorer", "Show Explorer", "Mostrar explorador", ["ctrl+shift+x"];
     ShowSearch, "view.search", "Show Search", "Mostrar busca", [];
     ShowGit, "view.git", "Show Source Control", "Mostrar controle de versão", ["ctrl+shift+g"];
     ShowOutline, "view.outline", "Show Outline", "Mostrar estrutura do arquivo", [];

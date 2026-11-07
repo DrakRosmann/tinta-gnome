@@ -68,6 +68,9 @@ para os aplicativos GTK.
 - `Ctrl+P` para arquivos; digitando `>` vira comandos, `:` vira linha, `@` vira símbolo
 - Voltar e avançar, marcadores, próximo problema, próxima alteração do git
 - Estrutura do arquivo na barra lateral
+- A árvore de arquivos pelo teclado: `Ctrl+Shift+X` vai até ela, as setas andam e abrem pastas
+  (`→` abre e entra, `←` fecha e sobe), `Enter` abre, `Espaço` abre e continua na árvore, `F2`
+  renomeia, `Delete` manda para a lixeira, uma letra pula para o nome e `Esc` volta ao texto
 
 **Busca**
 
@@ -323,5 +326,4 @@ GPL-3.0-only. Este é um projeto independente, sem ligação com o GNOME.
   cursor" ou breakpoints que só registram no console, e o programa depurado não recebe o que se digita
   (a entrada padrão). Para isso, use o terminal.
 - No Vim: sem `:global`, `:normal`, mapeamentos próprios nem `.vimrc`.
-- Sem navegação pelo teclado na árvore de arquivos.
 - A quebra de linha fica desligada em arquivos acima de 4 milhões de caracteres.

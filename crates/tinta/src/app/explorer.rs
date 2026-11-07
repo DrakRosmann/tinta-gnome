@@ -1,6 +1,6 @@
 //! The file tree.
 
-use super::{App, DialogState};
+use super::{App, DialogState, Focus, KeyEv};
 use crate::fx::{self, Task};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -116,6 +116,8 @@ impl App {
                 let Some(row) = self.explorer.rows.get(i).cloned() else { return Task::none() };
                 self.explorer.selected = Some(row.path.clone());
                 if row.is_dir {
+                    // The arrows carry on from the folder clicked.
+                    self.focus = Focus::Explorer;
                     if !self.explorer.expanded.remove(&row.path) {
                         self.explorer.expanded.insert(row.path);
                     }
@@ -206,6 +208,104 @@ impl App {
                 self.explorer.expanded.clear();
                 self.reload_explorer();
                 Task::none()
+            }
+        }
+    }
+
+    /// The row the keyboard is on: the selected path, or the first row.
+    fn explorer_cursor(&self) -> Option<usize> {
+        let rows = &self.explorer.rows;
+        if rows.is_empty() {
+            return None;
+        }
+        Some(self.explorer.selected.as_ref().and_then(|p| rows.iter().position(|r| r.path == *p)).unwrap_or(0))
+    }
+
+    fn explorer_select(&mut self, i: usize) {
+        if let Some(r) = self.explorer.rows.get(i) {
+            self.explorer.selected = Some(r.path.clone());
+        }
+    }
+
+    fn explorer_set_expanded(&mut self, path: &Path, open: bool) {
+        let changed = if open { self.explorer.expanded.insert(path.to_path_buf()) } else { self.explorer.expanded.remove(path) };
+        if changed {
+            self.reload_explorer();
+            self.mark_session_dirty();
+        }
+    }
+
+    /// Keys with the file tree focused, as in a file manager's tree: the arrows move and open
+    /// folders, Enter opens, F2 renames, Delete moves to the trash, a letter jumps to a name.
+    /// `None` leaves the key to the shortcuts.
+    pub fn explorer_key(&mut self, ev: &KeyEv) -> Option<Task> {
+        if ev.mods.control() || ev.mods.alt() || ev.mods.logo() {
+            return None;
+        }
+        if ev.name == "escape" {
+            self.focus = Focus::Editor;
+            return Some(fx::focus_editor());
+        }
+        let Some(cur) = self.explorer_cursor() else { return None };
+        let last = self.explorer.rows.len() - 1;
+        let row = self.explorer.rows[cur].clone();
+        let page = ((self.explorer.view_h / 26.0) as usize).max(2) - 1;
+        let go = |app: &mut App, i: usize| {
+            app.explorer_select(i);
+            Some(Task::none())
+        };
+        match ev.name.as_str() {
+            "up" => go(self, cur.saturating_sub(1)),
+            "down" => go(self, (cur + 1).min(last)),
+            "home" => go(self, 0),
+            "end" => go(self, last),
+            "pageup" => go(self, cur.saturating_sub(page)),
+            "pagedown" => go(self, (cur + page).min(last)),
+            "right" if row.is_dir && !row.expanded => {
+                self.explorer_set_expanded(&row.path, true);
+                Some(Task::none())
+            }
+            // Into an open folder: its first entry, if it has any.
+            "right" => match self.explorer.rows.get(cur + 1) {
+                Some(next) if row.is_dir && next.depth > row.depth => go(self, cur + 1),
+                _ => Some(Task::none()),
+            },
+            "left" if row.is_dir && row.expanded => {
+                self.explorer_set_expanded(&row.path, false);
+                Some(Task::none())
+            }
+            // Out to the folder this is in.
+            "left" => match self.explorer.rows[..cur].iter().rposition(|r| r.depth < row.depth) {
+                Some(parent) => go(self, parent),
+                None => Some(Task::none()),
+            },
+            "enter" if row.is_dir => {
+                self.explorer_set_expanded(&row.path, !row.expanded);
+                Some(Task::none())
+            }
+            "enter" => Some(self.open_path(&row.path)),
+            // Opens a file and stays in the tree, to look through several.
+            "space" if !row.is_dir => {
+                let t = self.open_path(&row.path);
+                self.focus = Focus::Explorer;
+                Some(t)
+            }
+            "space" => {
+                self.explorer_set_expanded(&row.path, !row.expanded);
+                Some(Task::none())
+            }
+            "f2" => Some(self.on_explorer(ExplorerMsg::Rename(row.path))),
+            "delete" => Some(self.on_explorer(ExplorerMsg::Trash(row.path))),
+            // Type to jump: the next name starting with the letter, round the list.
+            _ => {
+                let c = ev.text.as_deref().and_then(|t| t.chars().next()).filter(|c| !c.is_control())?;
+                let c = c.to_lowercase().to_string();
+                let n = self.explorer.rows.len();
+                let hit = (1..=n).map(|k| (cur + k) % n).find(|&i| self.explorer.rows[i].name.to_lowercase().starts_with(&c));
+                match hit {
+                    Some(i) => go(self, i),
+                    None => Some(Task::none()),
+                }
             }
         }
     }

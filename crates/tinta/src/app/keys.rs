@@ -71,6 +71,9 @@ impl App {
         if ev.name == "f11" && ev.mods.is_empty() && self.debug.is_live() {
             return self.run(tinta_core::keymap::Command::StepInto);
         }
+        if self.focus == Focus::Explorer && let Some(t) = self.explorer_key(&ev) {
+            return t;
+        }
         if let Some(t) = self.vim_on_key(&ev) {
             return t;
         }
@@ -156,6 +159,7 @@ impl App {
                         self.key_passthrough = true;
                         Task::none()
                     }
+                    Focus::Explorer => Task::none(),
                 }
             }
         }

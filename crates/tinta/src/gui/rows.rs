@@ -61,16 +61,18 @@ impl RowList {
         RowList { view, scroll, model, key: Cell::new(u64::MAX) }
     }
 
-    /// `n` rows; `key` says whether anything in them changed since last time.
-    pub fn set(&self, n: usize, key: u64) {
+    /// `n` rows; `key` says whether anything in them changed since last time. True when the
+    /// rows were rebuilt.
+    pub fn set(&self, n: usize, key: u64) -> bool {
         if self.key.get() == key && self.model.n_items() as usize == n {
-            return;
+            return false;
         }
         self.key.set(key);
         let old = self.model.n_items();
         let names: Vec<String> = (0..n).map(|i| i.to_string()).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         self.model.splice(0, old, &refs);
+        true
     }
 }
 

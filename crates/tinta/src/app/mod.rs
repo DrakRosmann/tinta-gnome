@@ -69,6 +69,8 @@ pub enum Focus {
     Editor,
     Terminal,
     Input,
+    /// The file tree, moved through with the arrows.
+    Explorer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -23,6 +23,7 @@ const CSS: &str = r#"
 .tinta-breadcrumbs { padding: 3px 12px; font-size: 0.9em; }
 .tinta-sidebar row { min-height: 26px; }
 .tinta-popup { background: @popover_bg_color; color: @popover_fg_color; border-radius: 12px; box-shadow: 0 2px 8px alpha(black, 0.25); border: 1px solid alpha(currentColor, 0.10); }
+.tinta-cursor { background: alpha(currentColor, 0.1); border-radius: 6px; }
 .tinta-findbar { padding: 6px 10px; border-bottom: 1px solid alpha(currentColor, 0.10); }
 .panel-text { background: transparent; }
 "#;

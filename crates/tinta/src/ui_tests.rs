@@ -456,6 +456,59 @@ fn explorer_click_opens_files_and_folders_expand() {
 }
 
 #[test]
+fn explorer_keyboard_moves_opens_and_folds() {
+    let dir = temp_dir("keys");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("sub/inner.txt"), "dentro\n").unwrap();
+    std::fs::write(dir.join("alpha.txt"), "a\n").unwrap();
+    std::fs::write(dir.join("beta.txt"), "b\n").unwrap();
+    let mut ui = Ui::new(vec![dir.clone()]);
+    let none = Modifiers::empty();
+    let cursor = |ui: &Ui| ui.app.explorer.selected.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+    ui.cmd(Command::ShowExplorer);
+    assert_eq!(ui.app.focus, Focus::Explorer);
+    // Starts on the first row; the arrows walk the list and stop at its ends.
+    ui.key("down", none, None);
+    assert_eq!(cursor(&ui).as_deref(), Some("alpha.txt"));
+    ui.key("end", none, None);
+    ui.key("down", none, None);
+    assert_eq!(cursor(&ui).as_deref(), Some("beta.txt"));
+    ui.key("home", none, None);
+    assert_eq!(cursor(&ui).as_deref(), Some("sub"));
+    // Right opens the folder, then goes into it; left goes back out, then closes it.
+    ui.key("right", none, None);
+    assert_eq!(ui.app.explorer.rows.len(), 4);
+    ui.key("right", none, None);
+    assert_eq!(cursor(&ui).as_deref(), Some("inner.txt"));
+    ui.key("left", none, None);
+    assert_eq!(cursor(&ui).as_deref(), Some("sub"));
+    ui.key("left", none, None);
+    assert_eq!(ui.app.explorer.rows.len(), 3);
+    // A letter jumps to the next name starting with it.
+    ui.key("b", none, Some("b"));
+    assert_eq!(cursor(&ui).as_deref(), Some("beta.txt"));
+    // Space opens and stays in the tree; Enter opens and goes to the text.
+    ui.key("space", none, None);
+    assert_eq!(ui.app.active().unwrap().1.doc.file_name(), "beta.txt");
+    assert_eq!(ui.app.focus, Focus::Explorer);
+    ui.key("up", none, None);
+    ui.key("enter", none, None);
+    assert_eq!(ui.app.active().unwrap().1.doc.file_name(), "alpha.txt");
+    assert_eq!(ui.app.focus, Focus::Editor);
+    // Typing in the text doesn't move the tree.
+    ui.typed("b");
+    assert_eq!(cursor(&ui).as_deref(), Some("alpha.txt"));
+    // F2 asks for a new name, Escape leaves the tree.
+    ui.cmd(Command::ShowExplorer);
+    ui.key("f2", none, None);
+    assert!(matches!(ui.app.dialog, Some(crate::app::DialogState::RenamePath(ref p)) if p.ends_with("alpha.txt")));
+    ui.key("escape", none, None);
+    ui.cmd(Command::ShowExplorer);
+    ui.key("escape", none, None);
+    assert_eq!(ui.app.focus, Focus::Editor);
+}
+
+#[test]
 fn palette_filters_and_runs_a_clicked_command() {
     let (mut ui, _) = Ui::with_file();
     ui.cmd(Command::CommandPalette);
