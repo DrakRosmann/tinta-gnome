@@ -146,11 +146,7 @@ impl App {
         self.tasks.last = Some(task.clone());
         self.panel = Some(PanelView::Tasks);
 
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg(&task.command)
-            .current_dir(&cwd)
-            .env("TERM", "dumb")
+        let child = tinta_core::host::command("sh", ["-c", task.command.as_str()], Some(&cwd), &[("TERM", "dumb")])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

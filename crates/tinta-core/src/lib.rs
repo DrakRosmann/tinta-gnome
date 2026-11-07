@@ -11,6 +11,7 @@ pub mod display;
 pub mod find;
 pub mod fuzzy;
 pub mod git;
+pub mod host;
 pub mod keymap;
 pub mod language;
 pub mod lsp;

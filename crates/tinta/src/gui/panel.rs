@@ -207,10 +207,13 @@ impl Panel {
             if configured.trim().is_empty() { std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()) } else { configured }
         };
         let env = ["TERM_PROGRAM=tinta", "COLORTERM=truecolor"];
+        // In a Flatpak the shell is the user's, outside the sandbox; VTE's TERM has to be passed on.
+        let argv = tinta_core::host::argv(&[shell_cmd], Some(cwd), &[("TERM", "xterm-256color"), ("TERM_PROGRAM", "tinta"), ("COLORTERM", "truecolor")]);
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         term.spawn_async(
             vte::PtyFlags::DEFAULT,
             cwd.to_str(),
-            &[shell_cmd.as_str()],
+            &argv,
             &env,
             glib::SpawnFlags::SEARCH_PATH,
             || {},

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// What the settings ask for. `Auto` goes by the desktop the editor finds itself on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -152,7 +152,7 @@ impl GnomePrefs {
     pub fn read() -> Self {
         let mut p = Self::default();
         for schema in ["org.gnome.desktop.interface", "org.gnome.desktop.wm.preferences"] {
-            if let Ok(out) = Command::new("gsettings").args(["list-recursively", schema]).stderr(Stdio::null()).output() {
+            if let Ok(out) = crate::host::command("gsettings", ["list-recursively", schema], None, &[]).stdin(Stdio::null()).stderr(Stdio::null()).output() {
                 p.apply_listing(&String::from_utf8_lossy(&out.stdout));
             }
         }
@@ -169,8 +169,8 @@ pub fn parse_monitor_line(line: &str) -> Option<(String, String)> {
 /// Calls `on_change` from a thread whenever an interface setting changes, while the editor runs.
 pub fn watch(on_change: impl Fn(String, String) + Send + 'static) {
     std::thread::spawn(move || {
-        let Ok(mut child) = Command::new("gsettings")
-            .args(["monitor", "org.gnome.desktop.interface"])
+        let Ok(mut child) = crate::host::command("gsettings", ["monitor", "org.gnome.desktop.interface"], None, &[])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -309,8 +309,8 @@ mod tests {
     /// Through the real `gsettings`, with a settings file of its own, never the user's.
     #[test]
     fn reading_and_watching_a_real_gsettings() {
-        if Command::new("gsettings").arg("--version").output().is_err()
-            || !Command::new("gsettings").args(["list-keys", "org.gnome.desktop.interface"]).output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("accent-color"))
+        if std::process::Command::new("gsettings").arg("--version").output().is_err()
+            || !std::process::Command::new("gsettings").args(["list-keys", "org.gnome.desktop.interface"]).output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("accent-color"))
         {
             eprintln!("skipped: no gsettings with GNOME's schemas");
             return;
@@ -319,7 +319,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let run = |args: &[&str]| {
-            Command::new("gsettings").args(args).env("GSETTINGS_BACKEND", "keyfile").env("XDG_CONFIG_HOME", &dir).output().unwrap()
+            std::process::Command::new("gsettings").args(args).env("GSETTINGS_BACKEND", "keyfile").env("XDG_CONFIG_HOME", &dir).output().unwrap()
         };
         run(&["set", "org.gnome.desktop.interface", "accent-color", "purple"]);
         run(&["set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark"]);

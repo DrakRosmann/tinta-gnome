@@ -251,12 +251,7 @@ pub fn default_servers(lsp_id: &str) -> &'static [(&'static str, &'static [&'sta
 }
 
 pub fn find_in_path(cmd: &str) -> bool {
-    if cmd.contains('/') {
-        return Path::new(cmd).is_file();
-    }
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|p| p.join(cmd).is_file()))
-        .unwrap_or(false)
+    crate::host::find(cmd)
 }
 
 /// Works out which command serves this language, honouring the user's settings.
@@ -329,9 +324,7 @@ impl Drop for Client {
 
 impl Client {
     pub fn start(cmd: &str, args: &[String], root: &Path, key: &str, sink: Sink) -> std::io::Result<Self> {
-        let mut child = Command::new(cmd)
-            .args(args)
-            .current_dir(root)
+        let mut child = crate::host::command(cmd, args, Some(root), &[])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

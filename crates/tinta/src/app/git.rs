@@ -35,11 +35,8 @@ pub enum GitMsg {
 }
 
 fn ignored_paths(root: &std::path::Path) -> Vec<PathBuf> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"])
-        .env("GIT_OPTIONAL_LOCKS", "0")
+    let out = tinta_core::host::command("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], Some(root), &[("GIT_OPTIONAL_LOCKS", "0")])
+        .stdin(std::process::Stdio::null())
         .output();
     let Ok(out) = out else { return Vec::new() };
     String::from_utf8_lossy(&out.stdout)

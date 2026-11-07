@@ -166,7 +166,7 @@ pub struct Adapter {
 fn gdb_major() -> Option<u32> {
     static CACHE: OnceLock<Option<u32>> = OnceLock::new();
     *CACHE.get_or_init(|| {
-        let out = Command::new("gdb").args(["--batch", "-ex", "python import gdb; print(gdb.VERSION)"]).stderr(Stdio::null()).output().ok()?;
+        let out = crate::host::command("gdb", ["--batch", "-ex", "python import gdb; print(gdb.VERSION)"], None, &[]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
         text.trim().split('.').next()?.parse().ok()
     })
@@ -197,7 +197,7 @@ fn escape_for_file_command(path: &str) -> String {
 }
 
 fn python_has_debugpy(python: &str) -> bool {
-    Command::new(python).args(["-c", "import debugpy"]).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    crate::host::command(python, ["-c", "import debugpy"], None, &[]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
 }
 
 /// The debugger behind a type of configuration, or how to get one.
@@ -342,7 +342,7 @@ fn auto_plan(root: &Path, file: Option<&Path>, language: &str) -> Result<Plan, S
             }
             // No build system: a single file, compiled on the side.
             let f = file.ok_or("save the file first")?;
-            let dir = std::env::temp_dir().join(format!("tinta-debug-{}", std::process::id()));
+            let dir = crate::host::temp_dir().join(format!("tinta-debug-{}", std::process::id()));
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
             let exe = dir.join(f.file_stem().unwrap_or_default());
             let cc = if language == "C" { "cc -g -O0" } else { "c++ -g -O0" };
@@ -384,9 +384,8 @@ pub fn newest_executable(root: &Path) -> Option<PathBuf> {
 }
 
 fn cargo_binary(root: &Path, near: Option<&Path>) -> Result<PathBuf, String> {
-    let out = Command::new("cargo")
-        .args(["metadata", "--no-deps", "--format-version", "1"])
-        .current_dir(root)
+    let out = crate::host::command("cargo", ["metadata", "--no-deps", "--format-version", "1"], Some(root), &[])
+        .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
         .map_err(|e| e.to_string())?;
@@ -487,9 +486,7 @@ fn read_message(r: &mut impl BufRead) -> Option<Value> {
 
 impl Client {
     fn start(adapter: &Adapter, cwd: &Path, sink: Sink) -> std::io::Result<Self> {
-        let mut child = Command::new(&adapter.command)
-            .args(&adapter.args)
-            .current_dir(cwd)
+        let mut child = crate::host::command(&adapter.command, &adapter.args, Some(cwd), &[])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -571,7 +568,8 @@ impl LaunchConfig {
     /// Only gdb is given one, which it takes before the program starts; with the other
     /// debuggers the program stays in the console.
     pub fn wants_terminal(&self) -> bool {
-        self.console != "internalConsole" && self.kind == "gdb"
+        // In a Flatpak, gdb runs outside the sandbox and can't reach a terminal opened inside it.
+        self.console != "internalConsole" && self.kind == "gdb" && !crate::host::sandboxed()
     }
 }
 

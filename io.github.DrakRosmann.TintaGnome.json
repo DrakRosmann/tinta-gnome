@@ -1,0 +1,61 @@
+{
+    "id": "io.github.DrakRosmann.TintaGnome",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "51",
+    "sdk": "org.gnome.Sdk",
+    "sdk-extensions": ["org.freedesktop.Sdk.Extension.rust-stable"],
+    "command": "tinta-gnome",
+    "finish-args": [
+        "--share=ipc",
+        "--share=network",
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--device=dri",
+        "--filesystem=host",
+        "--talk-name=org.freedesktop.Flatpak"
+    ],
+    "cleanup": ["/include", "/lib/pkgconfig", "/share/gir-1.0", "/share/vala", "*.a", "*.la"],
+    "modules": [
+        {
+            "name": "vte",
+            "buildsystem": "meson",
+            "config-opts": [
+                "-Dgtk3=false",
+                "-Dgtk4=true",
+                "-Dgir=false",
+                "-Dvapi=false",
+                "-Dglade=false",
+                "-Ddocs=false",
+                "-Dapp=false",
+                "-D_systemd=false"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://download.gnome.org/sources/vte/0.84/vte-0.84.1.tar.xz",
+                    "sha256": "aca1caa8478aebcdbb1d67897fb3511eb7601debae6810e16a15b6fa25f31ac8"
+                }
+            ]
+        },
+        {
+            "name": "tinta-gnome",
+            "buildsystem": "simple",
+            "build-options": {
+                "append-path": "/usr/lib/sdk/rust-stable/bin",
+                "env": {
+                    "CARGO_HOME": "/run/build/tinta-gnome/cargo",
+                    "CARGO_NET_OFFLINE": "true"
+                }
+            },
+            "build-commands": ["./install.sh /app"],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": ".",
+                    "skip": ["target", ".flatpak-builder", "flatpak-build", "flatpak-repo"]
+                },
+                "build-aux/flatpak/cargo-sources.json"
+            ]
+        }
+    ]
+}

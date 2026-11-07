@@ -178,6 +178,23 @@ nome, ícone e configurações próprios.
 Para ter inteligência de código, instale o servidor da sua linguagem: `rustup component add
 rust-analyzer`, `dnf install clang-tools-extra` e assim por diante. Ele é encontrado no `PATH`.
 
+### Flatpak
+
+```sh
+flatpak install --user flathub org.gnome.Sdk//51 org.freedesktop.Sdk.Extension.rust-stable//26.08 org.flatpak.Builder
+flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build io.github.DrakRosmann.TintaGnome.json
+flatpak run io.github.DrakRosmann.TintaGnome
+```
+
+A compilação não usa a rede: os crates vêm de `build-aux/flatpak/cargo-sources.json`, que se gera
+de novo com `build-aux/flatpak/cargo-sources.py` sempre que o `Cargo.lock` muda.
+
+O editor fica na sandbox, mas as ferramentas são as do seu sistema: o terminal abre o seu shell, e
+git, compiladores, depuradores e servidores de linguagem rodam fora dela, por `flatpak-spawn
+--host`. Por isso ele pede acesso aos arquivos e ao `org.freedesktop.Flatpak`. A única diferença: o
+programa depurado não ganha terminal próprio, porque o gdb, fora da sandbox, não alcança um terminal
+aberto dentro dela; a saída vai para o console de depuração.
+
 ## Configuração
 
 Tudo pode ser mudado na janela de configurações (`Ctrl+,`) ou à mão, em `~/.config/tinta-gnome/`. O

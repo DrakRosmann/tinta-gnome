@@ -2,15 +2,10 @@
 
 use similar::{ChangeTag, DiffTag, TextDiff};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 fn git(root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_TERMINAL_PROMPT", "0")
+    let out = crate::host::command("git", args, Some(root), &[("GIT_OPTIONAL_LOCKS", "0"), ("GIT_TERMINAL_PROMPT", "0")])
         .stdin(Stdio::null())
         .output()
         .map_err(|e| e.to_string())?;
