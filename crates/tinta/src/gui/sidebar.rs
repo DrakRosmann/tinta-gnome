@@ -163,7 +163,7 @@ impl Sidebar {
         for (name, icon, tip, view) in [
             ("explorer", "folder-symbolic", "Explorer", SidebarView::Explorer),
             ("search", "system-search-symbolic", "Search", SidebarView::Search),
-            ("git", "vcs-branch-symbolic", "Source Control", SidebarView::Git),
+            ("git", "tinta-git-symbolic", "Source Control", SidebarView::Git),
             ("outline", "view-list-bullet-symbolic", "Outline", SidebarView::Outline),
             ("debug", "tinta-debug-symbolic", "Run and Debug", SidebarView::Debug),
         ] {

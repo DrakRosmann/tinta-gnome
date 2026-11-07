@@ -102,7 +102,7 @@ impl StatusBar {
             {
                 label.push_str(&format!(" ↑{ahead} ↓{behind}"));
             }
-            start.push(icon_item("vcs-branch-symbolic", label, Act::Cmd(Command::GitCheckout)));
+            start.push(icon_item("tinta-git-symbolic", label, Act::Cmd(Command::GitCheckout)));
         }
         let (mut errors, mut warnings) = (0, 0);
         for d in app.project_diags.values().flatten() {

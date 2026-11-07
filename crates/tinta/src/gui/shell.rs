@@ -19,6 +19,30 @@ pub struct Shell {
     frame_timer: RefCell<Option<glib::SourceId>>,
 }
 
+/// Icons the desktop's theme doesn't have, and the app's own, put where GTK looks for them.
+fn install_icons() {
+    const ICONS: &[(&str, &str)] = &[
+        ("actions/tinta-git-symbolic.svg", include_str!("../../icons/tinta-git-symbolic.svg")),
+        ("actions/tinta-debug-symbolic.svg", include_str!("../../icons/tinta-debug-symbolic.svg")),
+        ("actions/tinta-step-over-symbolic.svg", include_str!("../../icons/tinta-step-over-symbolic.svg")),
+        ("actions/tinta-step-in-symbolic.svg", include_str!("../../icons/tinta-step-in-symbolic.svg")),
+        ("actions/tinta-step-out-symbolic.svg", include_str!("../../icons/tinta-step-out-symbolic.svg")),
+        ("apps/io.github.DrakRosmann.TintaGnome.svg", include_str!("../../../../data/icons/scalable/apps/io.github.DrakRosmann.TintaGnome.svg")),
+    ];
+    let root = glib::user_cache_dir().join("tinta-gnome").join("icons");
+    let dir = root.join("hicolor").join("scalable");
+    for (name, svg) in ICONS {
+        let p = dir.join(name);
+        if std::fs::read_to_string(&p).ok().as_deref() != Some(*svg) {
+            let _ = p.parent().map(std::fs::create_dir_all);
+            let _ = std::fs::write(&p, svg);
+        }
+    }
+    if let Some(display) = gdk::Display::default() {
+        gtk::IconTheme::for_display(&display).add_search_path(&root);
+    }
+}
+
 /// The desktop's monospace font, if libadwaita knows it.
 pub fn system_mono() -> Option<String> {
     let name = adw::StyleManager::default().monospace_font_name();
@@ -45,6 +69,7 @@ impl Shell {
             window: OnceCell::new(),
             frame_timer: RefCell::new(None),
         });
+        install_icons();
         let window = Window::build(gapp, &shell);
         let _ = shell.window.set(window);
 

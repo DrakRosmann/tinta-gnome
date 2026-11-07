@@ -205,8 +205,14 @@ impl Window {
             if let Some(ed) = focus.as_ref().and_then(|f| f.downcast_ref::<Editor>()) {
                 let vim_cmd = { let a = s.app.borrow(); a.settings.vim_mode && !a.vim.is_insert() };
                 let plain = !state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK);
-                if !vim_cmd && plain && let Some(ev) = c.current_event() && ed.filter_key(&ev) {
-                    return glib::Propagation::Stop;
+                if !vim_cmd && plain && let Some(ev) = c.current_event() {
+                    let took = ed.filter_key(&ev);
+                    if std::env::var_os("TINTA_DEBUG_IM").is_some() {
+                        eprintln!("im: key {:?} took={took}", keyval.name());
+                    }
+                    if took {
+                        return glib::Propagation::Stop;
+                    }
                 }
             }
             if in_field && keys::is_dead(keyval) {
@@ -323,10 +329,14 @@ impl Window {
 
     /// A picture of the window as it's drawn, header bar included, for the test scripts.
     pub fn screenshot(&self, path: &Path) {
-        let w = self.window.width();
-        let h = self.window.height();
-        let paintable = gtk::WidgetPaintable::new(Some(&self.window));
+        let Some(content) = self.window.content() else { return };
+        let w = content.width();
+        let h = content.height();
+        let paintable = gtk::WidgetPaintable::new(Some(&content));
         let snap = gtk::Snapshot::new();
+        // The window's own background, which the content is drawn on.
+        let bg = if adw::StyleManager::default().is_dark() { gdk::RGBA::new(0.133, 0.133, 0.149, 1.0) } else { gdk::RGBA::new(0.98, 0.98, 0.984, 1.0) };
+        snap.append_color(&bg, &gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
         paintable.snapshot(&snap, w as f64, h as f64);
         let Some(node) = snap.to_node() else { return };
         let Some(native) = self.window.native() else { return };

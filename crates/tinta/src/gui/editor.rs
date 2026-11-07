@@ -27,6 +27,10 @@ mod imp {
         pub pointer: Cell<Option<(f32, f32)>>,
         pub timer: RefCell<Option<(Instant, glib::SourceId)>>,
         pub im: RefCell<Option<gtk::IMMulticontext>>,
+        /// GTK's own composing, for when the desktop's input method won't take a dead key, as
+        /// happens on compositors without one: ´ and a still make á.
+        pub compose: RefCell<Option<gtk::IMContextSimple>>,
+        pub composing: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -157,6 +161,9 @@ impl Editor {
         im.set_client_widget(Some(&w));
         let me = w.downgrade();
         im.connect_commit(move |_, text| {
+            if std::env::var_os("TINTA_DEBUG_IM").is_some() {
+                eprintln!("im: commit {text:?}");
+            }
             if let Some(w) = me.upgrade() {
                 w.deliver(Event::InputMethod(gfx::input_method::Event::Commit(text.to_string())));
             }
@@ -189,6 +196,24 @@ impl Editor {
         });
         w.add_controller(focus);
         *imp.im.borrow_mut() = Some(im);
+        let simple = gtk::IMContextSimple::new();
+        simple.set_client_widget(Some(&w));
+        let me = w.downgrade();
+        simple.connect_commit(move |_, text| {
+            if let Some(w) = me.upgrade() {
+                w.imp().composing.set(false);
+                w.deliver(Event::InputMethod(gfx::input_method::Event::Commit(text.to_string())));
+            }
+        });
+        let me = w.downgrade();
+        simple.connect_preedit_changed(move |im| {
+            if let Some(w) = me.upgrade() {
+                let (text, _, _) = im.preedit_string();
+                w.deliver(Event::InputMethod(gfx::input_method::Event::Preedit(text.to_string(), None)));
+            }
+        });
+        simple.focus_in();
+        *imp.compose.borrow_mut() = Some(simple);
         w
     }
 
@@ -206,7 +231,28 @@ impl Editor {
 
     /// Lets the input method look at a key first. True if it took it.
     pub fn filter_key(&self, ev: &gdk::Event) -> bool {
-        self.imp().im.borrow().as_ref().is_some_and(|im| im.filter_keypress(ev))
+        let imp = self.imp();
+        let simple = imp.compose.borrow().clone();
+        if imp.composing.get()
+            && let Some(s) = &simple
+        {
+            let took = s.filter_keypress(ev);
+            // Escape and the like end it without a char.
+            let (preedit, _, _) = s.preedit_string();
+            if preedit.is_empty() {
+                imp.composing.set(false);
+            }
+            return took;
+        }
+        if imp.im.borrow().as_ref().is_some_and(|im| im.filter_keypress(ev)) {
+            return true;
+        }
+        let dead = ev.downcast_ref::<gdk::KeyEvent>().is_some_and(|k| super::keys::is_dead(k.keyval()));
+        if dead && let Some(s) = &simple && s.filter_keypress(ev) {
+            imp.composing.set(true);
+            return true;
+        }
+        false
     }
 
     fn set_mods(&self, state: gdk::ModifierType) {
