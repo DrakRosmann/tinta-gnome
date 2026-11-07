@@ -25,6 +25,13 @@ pub use sidebar::current_symbols;
 pub use shell::Shell;
 
 pub fn run() -> glib::ExitCode {
+    // `GTK_THEME` makes libadwaita drop its own style sheet, and with it the accent color and the
+    // look of its widgets. adw-gtk3 is set there for GTK 3 apps, to look like libadwaita: here it
+    // would only take that look away.
+    if std::env::var("GTK_THEME").is_ok_and(|t| t.starts_with("adw-gtk3")) {
+        // SAFETY: GTK hasn't started and no other thread exists yet.
+        unsafe { std::env::remove_var("GTK_THEME") };
+    }
     let args: Vec<String> = std::env::args().collect();
     // `--new-session` is an editor of its own: it doesn't join the one already running.
     let mut flags = gio::ApplicationFlags::HANDLES_COMMAND_LINE | gio::ApplicationFlags::HANDLES_OPEN;

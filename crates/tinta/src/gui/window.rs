@@ -46,7 +46,7 @@ pub struct Window {
     main: gtk::Paned,
     right: gtk::Paned,
     groups_box: gtk::Box,
-    welcome: adw::StatusPage,
+    welcome: adw::BreakpointBin,
     groups: RefCell<Vec<Rc<GroupView>>>,
     pub panel: Rc<Panel>,
     pub sidebar: Rc<Sidebar>,
@@ -85,7 +85,7 @@ impl Window {
         gtk::style_context_add_provider_for_display(&gdk::Display::default().expect("display"), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         let window = adw::ApplicationWindow::builder().application(gapp).default_width(1280).default_height(820).title("Tinta").build();
-        window.set_size_request(480, 320);
+        window.set_size_request(360, 294);
 
         let header = adw::HeaderBar::new();
         let title = adw::WindowTitle::new("Tinta", "");
@@ -107,10 +107,10 @@ impl Window {
             .icon_name("io.github.DrakRosmann.TintaGnome")
             .title("Tinta")
             .description(tr("Open a file or a folder to start"))
-            .vexpand(true)
             .build();
         let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         buttons.set_halign(gtk::Align::Center);
+        buttons.set_homogeneous(true);
         for (label, cmd, suggested) in [("Open Folder", Command::OpenFolder, true), ("Open File", Command::OpenFile, false), ("New File", Command::NewFile, false)] {
             let b = gtk::Button::with_label(tr(label));
             b.add_css_class("pill");
@@ -126,6 +126,11 @@ impl Window {
             buttons.append(&b);
         }
         welcome.set_child(Some(&buttons));
+        // Too narrow for the buttons side by side, they stack.
+        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(adw::BreakpointConditionLengthType::MaxWidth, 560.0, adw::LengthUnit::Sp));
+        narrow.add_setter(&buttons, "orientation", Some(&gtk::Orientation::Vertical.to_value()));
+        let welcome = adw::BreakpointBin::builder().child(&welcome).width_request(200).height_request(200).hexpand(true).vexpand(true).build();
+        welcome.add_breakpoint(narrow);
         groups_box.append(&welcome);
 
         let panel = Panel::build(shell);
