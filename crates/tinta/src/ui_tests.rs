@@ -530,6 +530,42 @@ fn narrow_window_floats_the_sidebar_and_puts_it_back() {
 }
 
 #[test]
+fn completion_offers_the_language_words_as_you_type() {
+    let dir = temp_dir("kw");
+    let src = dir.join("main.rs");
+    std::fs::write(&src, "fn main() {\n    \n}\n").unwrap();
+    let mut ui = Ui::new(vec![src]);
+    let labels = |ui: &Ui| -> Vec<String> {
+        let Some(c) = &ui.app.completion else { return Vec::new() };
+        c.visible.iter().map(|i| c.entries[*i].label.clone()).collect()
+    };
+    ui.app.jump_to(1, 4);
+    ui.typed("pri");
+    let shown = labels(&ui);
+    assert!(shown.contains(&"println!".to_string()) && shown.contains(&"print!".to_string()), "{shown:?}");
+    assert!(!shown.contains(&"impl".to_string()), "only words starting with what's typed: {shown:?}");
+    // Narrows as you go on, and Enter puts the word in.
+    ui.typed("ntl");
+    assert_eq!(labels(&ui).first().map(String::as_str), Some("println!"));
+    ui.key("enter", Modifiers::empty(), None);
+    assert_eq!(ui.app.active().unwrap().1.doc.line_text(1).trim_end(), "    println!");
+
+    // Each language its own: C has printf and its keywords, Rust's macros are not there.
+    let c = dir.join("prog.c");
+    std::fs::write(&c, "int main(void) {\n    \n}\n").unwrap();
+    let t = ui.app.open_path(&c);
+    ui.run(t);
+    ui.app.jump_to(1, 4);
+    ui.typed("pr");
+    let shown = labels(&ui);
+    assert!(shown.contains(&"printf".to_string()), "{shown:?}");
+    assert!(!shown.contains(&"println!".to_string()), "{shown:?}");
+    ui.key("escape", Modifiers::empty(), None);
+    ui.typed(" w");
+    assert!(labels(&ui).contains(&"while".to_string()), "{:?}", labels(&ui));
+}
+
+#[test]
 fn palette_filters_and_runs_a_clicked_command() {
     let (mut ui, _) = Ui::with_file();
     ui.cmd(Command::CommandPalette);

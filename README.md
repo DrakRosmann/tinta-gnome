@@ -88,6 +88,10 @@ pyright, gopls, typescript-language-server, lua-language-server e os de mais de 
 linguagens.
 
 - Sugestões ao digitar, misturadas com palavras do arquivo e snippets
+- Mesmo sem servidor, e em arquivos sem título, as sugestões trazem as palavras da linguagem: as
+  palavras-chave e as funções, tipos e macros que vêm com ela (`println!`, `printf`, `len`,
+  `console`…), em Rust, C, C++, Python, JavaScript, TypeScript, Go, Java, C#, Kotlin, Swift, PHP,
+  Ruby, Lua, Bash, SQL, HTML e CSS
 - Informações ao passar o mouse, dicas de parâmetros
 - Ir para definição, declaração, implementação e tipo; localizar referências
 - Renomear símbolo em todos os arquivos, formatar, correções rápidas

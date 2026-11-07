@@ -77,6 +77,8 @@ pub fn tr(en: &'static str) -> &'static str {
         "This debugger can't change this value" => "Este depurador não muda este valor",
         "New value" => "Novo valor",
         "Change Value…" => "Mudar valor…",
+        "keyword" => "palavra-chave",
+        "built-in" => "da linguagem",
         "Refresh" => "Atualizar",
         "Collapse All" => "Recolher tudo",
         "Rename" => "Renomear",

@@ -36,6 +36,8 @@ pub enum Pending {
 pub enum CompletionSource {
     Lsp(Box<CompletionItem>),
     Word,
+    /// A keyword or built-in of the file's language: picked with Enter like the server's items.
+    Language,
     Snippet(String),
 }
 
@@ -450,8 +452,36 @@ impl App {
         let anchor = commands::word_at(&e.doc, head).0.min(head);
         let prefix = e.doc.slice_string(anchor, head);
         let mut entries = Vec::new();
+        // The language's own words, by what's typed so far: keywords, and what comes with it.
+        let lower = prefix.to_lowercase();
+        let language_words = tinta_core::keywords::for_language(&e.doc.language.name);
+        if !prefix.is_empty() {
+            for (w, kind) in &language_words {
+                if !w.to_lowercase().starts_with(&lower) || *w == prefix {
+                    continue;
+                }
+                let (tag, detail, rank) = match kind {
+                    tinta_core::keywords::Kind::Keyword => ("kw", tr("keyword"), 0),
+                    tinta_core::keywords::Kind::Builtin => ("std", tr("built-in"), 1),
+                };
+                // `p` puts `pub` and `print!` before `PartialEq`, and keywords before the rest.
+                let case = if w.starts_with(prefix.as_str()) { 0 } else { 1 };
+                entries.push(CompletionEntry {
+                    filter: w.to_string(),
+                    sort: format!("x{case}{rank}{w}"),
+                    label: w.to_string(),
+                    detail: detail.to_string(),
+                    kind: tag,
+                    source: CompletionSource::Language,
+                    positions: Vec::new(),
+                });
+            }
+        }
         if settings_word && !prefix.is_empty() {
             for w in commands::words_with_prefix(&e.doc, &prefix, head, 30) {
+                if language_words.iter().any(|(k, _)| *k == w) {
+                    continue;
+                }
                 entries.push(CompletionEntry {
                     filter: w.clone(),
                     sort: format!("z{w}"),
@@ -541,7 +571,7 @@ impl App {
         let Some(c) = self.completion.take() else { return Task::none() };
         let Some(entry) = c.visible.get(c.selected).and_then(|i| c.entries.get(*i)).cloned() else { return Task::none() };
         match entry.source {
-            CompletionSource::Word => {
+            CompletionSource::Word | CompletionSource::Language => {
                 let label = entry.label;
                 self.replace_range_with(c.anchor, &label);
             }
@@ -834,7 +864,7 @@ impl App {
                 c.entries.retain(|e| !matches!(e.source, CompletionSource::Lsp(_)));
                 let names: std::collections::HashSet<String> = items.iter().map(|i| i.label.trim().to_string()).collect();
                 // Words the server already offers aren't worth listing twice.
-                c.entries.retain(|e| !(matches!(e.source, CompletionSource::Word) && names.contains(&e.label)));
+                c.entries.retain(|e| !(matches!(e.source, CompletionSource::Word | CompletionSource::Language) && names.contains(&e.label)));
                 for i in items {
                     c.entries.push(CompletionEntry {
                         label: i.label.trim().to_string(),

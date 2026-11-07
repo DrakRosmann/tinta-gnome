@@ -13,6 +13,7 @@ pub mod fuzzy;
 pub mod git;
 pub mod host;
 pub mod keymap;
+pub mod keywords;
 pub mod language;
 pub mod lsp;
 pub mod outline;
