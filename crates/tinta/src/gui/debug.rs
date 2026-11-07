@@ -193,6 +193,7 @@ impl DebugSidebar {
             d.breakpoints.iter().map(|(p, l)| (p.clone(), l.iter().map(|b| (b.line, b.enabled, b.condition.clone(), b.state == BpState::Pending)).collect::<Vec<_>>())).collect::<Vec<_>>(),
             d.watches.clone(),
             d.after_build.is_some(),
+            (app.focus == crate::app::Focus::List && app.sidebar == Some(crate::app::SidebarView::Debug)).then_some(app.list_cursor),
         ));
         if *self.last.borrow() == key {
             return;
@@ -230,8 +231,18 @@ impl DebugSidebar {
         self.list.append(&section("Variables"));
         match live {
             Some(s) if stopped => {
-                for r in s.variable_rows() {
-                    self.list.append(&self.var_row(shell, r, None));
+                // The row the keyboard is on, when it's in this list.
+                let cursor = (app.focus == crate::app::Focus::List && app.sidebar == Some(crate::app::SidebarView::Debug)).then_some(app.list_cursor);
+                for (i, r) in s.variable_rows().into_iter().enumerate() {
+                    let row = self.var_row(shell, r, None);
+                    if cursor == Some(i) {
+                        row.add_css_class("tinta-cursor");
+                        let row = row.clone();
+                        glib::idle_add_local_once(move || {
+                            row.grab_focus();
+                        });
+                    }
+                    self.list.append(&row);
                 }
             }
             _ => self.list.append(&hint("Shown when the program pauses")),

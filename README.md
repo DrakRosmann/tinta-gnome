@@ -74,6 +74,11 @@ para os aplicativos GTK.
 - A árvore de arquivos pelo teclado: `Ctrl+Shift+X` vai até ela, as setas andam e abrem pastas
   (`→` abre e entra, `←` fecha e sobe), `Enter` abre, `Espaço` abre e continua na árvore, `F2`
   renomeia, `Delete` manda para a lixeira, uma letra pula para o nome e `Esc` volta ao texto
+- As outras listas da barra lateral também, pelo teclado: `↓` no campo de busca ou na mensagem de
+  commit desce para a lista, "Mostrar estrutura", "Mostrar controle de versão" e "Mostrar depuração"
+  vão direto a ela. As setas andam, `Enter` faz o que o clique faz, `→`/`←` abrem e fecham os
+  arquivos da busca e as variáveis, `Espaço` prepara ou tira um arquivo do commit, `F2` muda o valor
+  de uma variável e `Esc` volta ao texto
 
 **Busca**
 

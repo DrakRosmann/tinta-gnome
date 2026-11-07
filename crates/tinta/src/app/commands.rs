@@ -248,8 +248,17 @@ impl App {
                 return t;
             }
             C::ShowSearch => return self.open_search(false),
-            C::ShowGit => return self.show_sidebar(SidebarView::Git),
-            C::ShowOutline => return self.show_sidebar(SidebarView::Outline),
+            // These take the keyboard to their list, as the explorer does.
+            C::ShowGit => {
+                let t = self.show_sidebar(SidebarView::Git);
+                self.focus_list(SidebarView::Git);
+                return t;
+            }
+            C::ShowOutline => {
+                let t = self.show_sidebar(SidebarView::Outline);
+                self.focus_list(SidebarView::Outline);
+                return t;
+            }
             C::TogglePanel => {
                 if self.panel.is_some() {
                     self.panel = None;
@@ -311,7 +320,11 @@ impl App {
                     }
                 }
             }
-            C::ShowDebug => return self.show_sidebar(SidebarView::Debug),
+            C::ShowDebug => {
+                let t = self.show_sidebar(SidebarView::Debug);
+                self.focus_list(SidebarView::Debug);
+                return t;
+            }
             C::ShowDebugConsole => self.panel = Some(PanelView::Debug),
             C::DebugConfigure => return self.debug_configure(),
             C::DebugSelectConfig => return self.debug_pick_config(),

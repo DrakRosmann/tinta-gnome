@@ -8,6 +8,7 @@ mod editing;
 mod explorer;
 mod git;
 mod keys;
+mod lists;
 mod lsp;
 mod palette;
 mod script;
@@ -26,6 +27,7 @@ pub use debug::{DEBUG_INPUT, DebugMsg, DebugPanel, WATCH_INPUT};
 pub use tasks::{TaskMsg, TaskPanel};
 pub use vim::{VIM_LINE, VimMsg};
 pub use search::{SearchMsg, SearchPanel, SearchRow, SEARCH_INPUT};
+pub use lists::GIT_INPUT;
 
 use crate::fx;
 use crate::gfx::Modifiers;
@@ -71,6 +73,8 @@ pub enum Focus {
     Input,
     /// The file tree, moved through with the arrows.
     Explorer,
+    /// One of the sidebar's other lists: search results, git, outline or variables.
+    List,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,6 +224,8 @@ pub enum Message {
     OpenFolderPath(PathBuf),
     /// The window became too narrow for the sidebar beside the text, or wide enough again.
     Narrow(bool),
+    /// The keyboard goes into a sidebar list, from the field above it.
+    ListFocus(SidebarView),
     /// The banner about a missing language server: copy its command, if it has one, and close it.
     LspHintDone(String),
     OpenFiles(Vec<PathBuf>),
@@ -329,6 +335,8 @@ pub struct App {
     pub key_passthrough: bool,
     /// The window is narrow: the sidebar floats over the text, and goes away once a file opens.
     pub narrow: bool,
+    /// The row the keyboard is on in the sidebar list shown, with `Focus::List`.
+    pub list_cursor: usize,
     /// Languages whose server isn't installed, by LSP id: the language's name and how to get one.
     pub lsp_missing: HashMap<String, (String, tinta_core::lsp::InstallHint)>,
     /// The ones the user closed the banner for, this session.
@@ -422,6 +430,7 @@ impl App {
             modifiers: Modifiers::default(),
             key_passthrough: false,
             narrow: false,
+            list_cursor: 0,
             lsp_missing: HashMap::new(),
             lsp_hint_closed: Default::default(),
             sidebar_wide: None,
@@ -666,6 +675,12 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ListFocus(view) => {
+                if self.sidebar == Some(view) {
+                    self.focus_list(view);
+                }
+                Task::none()
+            }
             Message::Narrow(narrow) => {
                 if narrow != self.narrow {
                     self.narrow = narrow;
@@ -882,4 +897,15 @@ pub fn save_session(app: &App) {
     if let Err(e) = s.save() {
         log::warn!("could not save the session: {e}");
     }
+}
+
+/// What's listed in the outline: LSP's list when it's current, otherwise the tree's or the patterns'.
+pub fn symbols_of(e: &DocEntry) -> Vec<(String, String, usize, usize)> {
+    if let Some((rev, list)) = &e.lsp_symbols
+        && *rev == e.doc.revision
+        && !list.is_empty()
+    {
+        return list.iter().map(|s| (s.name.clone(), s.detail.clone(), s.line, s.depth)).collect();
+    }
+    e.symbols.iter().map(|s| (s.name.clone(), s.kind.to_string(), s.line, s.depth)).collect()
 }

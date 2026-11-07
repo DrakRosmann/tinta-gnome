@@ -74,6 +74,9 @@ impl App {
         if self.focus == Focus::Explorer && let Some(t) = self.explorer_key(&ev) {
             return t;
         }
+        if self.focus == Focus::List && let Some(t) = self.list_key(&ev) {
+            return t;
+        }
         if let Some(t) = self.vim_on_key(&ev) {
             return t;
         }
@@ -159,7 +162,7 @@ impl App {
                         self.key_passthrough = true;
                         Task::none()
                     }
-                    Focus::Explorer => Task::none(),
+                    Focus::Explorer | Focus::List => Task::none(),
                 }
             }
         }

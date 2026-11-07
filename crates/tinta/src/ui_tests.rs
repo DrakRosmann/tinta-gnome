@@ -613,6 +613,66 @@ fn a_language_without_its_server_says_how_to_get_one() {
 }
 
 #[test]
+fn the_sidebar_lists_by_keyboard() {
+    let dir = temp_dir("lists");
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(args).output().unwrap().status.success());
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(dir.join("a.rs"), "fn um() {\n    alvo();\n}\n\nfn dois() {\n    alvo();\n}\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "alvo\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-qm", "x"]);
+    let mut ui = Ui::new(vec![dir.clone()]);
+    let none = Modifiers::empty();
+
+    // Search: Down from the field into the results, Enter opens the match.
+    ui.cmd(Command::ShowSearch);
+    let _ = ui.app.update(Message::Search(crate::app::SearchMsg::Query("alvo".into())));
+    wait_for(&mut ui, |a| !a.search.running && !a.search.rows.is_empty());
+    ui.msg(Message::ListFocus(SidebarView::Search));
+    assert_eq!(ui.app.focus, Focus::List);
+    assert_eq!(ui.app.list_cursor, 0, "on the first file");
+    ui.key("down", none, None);
+    ui.key("enter", none, None);
+    let (file, line) = { let (t, e) = ui.app.active().unwrap(); (e.doc.file_name(), e.doc.char_to_line(t.cursors.head())) };
+    assert_eq!((file.as_str(), line), ("a.rs", 1));
+    // Back in, Left on a result goes up to its file, Left again closes it; Up at the top is the field.
+    ui.msg(Message::ListFocus(SidebarView::Search));
+    ui.key("down", none, None);
+    ui.key("left", none, None);
+    assert_eq!(ui.app.list_cursor, 0);
+    let rows = ui.app.search.rows.len();
+    ui.key("left", none, None);
+    assert!(ui.app.search.rows.len() < rows, "the file's results closed");
+    ui.key("up", none, None);
+    assert_eq!(ui.app.focus, Focus::Input);
+
+    // Outline: on the symbol around the caret; Enter goes to the one chosen.
+    ui.app.jump_to(5, 0);
+    ui.cmd(Command::ShowOutline);
+    assert_eq!(ui.app.focus, Focus::List);
+    let names: Vec<String> = crate::app::symbols_of(ui.app.active().unwrap().1).into_iter().map(|s| s.0).collect();
+    assert_eq!(names[ui.app.list_cursor], "dois", "{names:?}");
+    ui.key("home", none, None);
+    ui.key("enter", none, None);
+    assert_eq!(ui.app.focus, Focus::Editor);
+    assert_eq!(ui.head().0, 0);
+
+    // Git: a changed file; Space stages it, and it moves to the staged ones.
+    std::fs::write(dir.join("b.txt"), "outro\n").unwrap();
+    ui.cmd(Command::GitRefresh);
+    wait_for(&mut ui, |a| a.git.entries.iter().any(|e| e.path == "b.txt"));
+    ui.cmd(Command::ShowGit);
+    assert_eq!(ui.app.focus, Focus::List);
+    assert_eq!(ui.app.git_rows()[ui.app.list_cursor].0.path, "b.txt");
+    ui.key("space", none, None);
+    wait_for(&mut ui, |a| a.git_rows().iter().any(|(e, staged)| e.path == "b.txt" && *staged));
+    ui.key("escape", none, None);
+    assert_eq!(ui.app.focus, Focus::Editor);
+}
+
+#[test]
 fn palette_filters_and_runs_a_clicked_command() {
     let (mut ui, _) = Ui::with_file();
     ui.cmd(Command::CommandPalette);
@@ -1177,6 +1237,26 @@ fn debugging_a_program_through_the_interface() {
     assert_eq!(loc(&ui), Some((5, true)));
     assert_eq!(ui.head().0, 5, "the caret goes to where it stopped");
     assert_eq!(ui.app.debug.breakpoints[&src][0].state, tinta_core::dap::BpState::Verified);
+
+    // The variables by keyboard: the first row is a scope, Down reaches `n`, Enter on a plain
+    // value asks for a new one, Left goes back up to the scope.
+    wait_long(&mut ui, |a| a.debug.session.as_ref().is_some_and(|s| s.variable_rows().iter().any(|r| r.path == "Arguments/n")));
+    ui.cmd(Command::ShowDebug);
+    assert_eq!(ui.app.focus, Focus::List);
+    let rows = ui.app.debug.session.as_ref().unwrap().variable_rows();
+    assert!(rows[0].is_scope, "{:?}", rows.iter().map(|r| &r.path).collect::<Vec<_>>());
+    let n = rows.iter().position(|r| r.path == "Arguments/n").expect("n");
+    for _ in 0..n {
+        ui.key("down", Modifiers::empty(), None);
+    }
+    ui.key("enter", Modifiers::empty(), None);
+    assert!(matches!(&ui.app.dialog, Some(crate::app::DialogState::SetValue(r)) if r.path == "Arguments/n"));
+    let _ = ui.app.update(Message::Dialog(crate::app::DialogMsg::Cancel));
+    ui.app.focus = Focus::List;
+    ui.key("left", Modifiers::empty(), None);
+    assert!(rows[ui.app.list_cursor].is_scope);
+    ui.key("escape", Modifiers::empty(), None);
+    assert_eq!(ui.app.focus, Focus::Editor);
 
     // F10 steps, and the panels draw whatever comes.
     ui.key("f10", Modifiers::empty(), None);

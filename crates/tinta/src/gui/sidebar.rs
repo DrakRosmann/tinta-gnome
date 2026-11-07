@@ -2,7 +2,7 @@
 
 use super::Shell;
 use super::rows::{self, RowList};
-use crate::app::{App, ExplorerMsg, Focus, GitMsg, Message, RowAction, SEARCH_INPUT, SearchMsg, SearchRow, SidebarView};
+use crate::app::{App, ExplorerMsg, Focus, symbols_of, GitMsg, Message, RowAction, SEARCH_INPUT, SearchMsg, SearchRow, SidebarView};
 use crate::i18n::tr;
 use crate::state::{DocEntry, Tab};
 use adw::prelude::*;
@@ -32,6 +32,8 @@ pub struct Sidebar {
     git_message: gtk::Entry,
     git_commit: gtk::Button,
     git_list: gtk::ListBox,
+    /// The git list's file rows, in `App::git_rows` order.
+    git_rows: RefCell<Vec<gtk::ListBoxRow>>,
     git_form: gtk::Box,
     git_none: gtk::Label,
     outline: RowList,
@@ -45,6 +47,8 @@ struct Last {
     git: u64,
     /// The tree's keyboard row last scrolled to and focused.
     explorer_cursor: Option<usize>,
+    /// The same for the other lists, with the view it was in.
+    list_cursor: Option<(SidebarView, usize)>,
 }
 
 fn view_name(v: SidebarView) -> &'static str {
@@ -95,16 +99,6 @@ fn git_class(mark: char) -> &'static str {
     }
 }
 
-/// What's listed in the outline: LSP's list when it's current, otherwise the tree's or the patterns'.
-pub fn symbols_of(e: &DocEntry) -> Vec<(String, String, usize, usize)> {
-    if let Some((rev, list)) = &e.lsp_symbols
-        && *rev == e.doc.revision
-        && !list.is_empty()
-    {
-        return list.iter().map(|s| (s.name.clone(), s.detail.clone(), s.line, s.depth)).collect();
-    }
-    e.symbols.iter().map(|s| (s.name.clone(), s.kind.to_string(), s.line, s.depth)).collect()
-}
 
 /// The symbols around the caret, outermost first.
 pub fn current_symbols(e: &DocEntry, t: &Tab) -> Vec<String> {
@@ -149,7 +143,7 @@ impl Sidebar {
     }
 
     pub fn fields(&self) -> Vec<(&'static str, gtk::Widget)> {
-        let mut v = vec![(SEARCH_INPUT, self.search_query.clone().upcast())];
+        let mut v = vec![(SEARCH_INPUT, self.search_query.clone().upcast()), (crate::app::GIT_INPUT, self.git_message.clone().upcast())];
         v.extend(self.debug.fields());
         v
     }
@@ -278,6 +272,7 @@ impl Sidebar {
         form.set_margin_start(10);
         form.set_margin_end(10);
         let search_query = rows::entry(shell, tr("Find"), |t| Message::Search(SearchMsg::Query(t)));
+        down_to_list(shell, &search_query, SidebarView::Search);
         let s = Rc::downgrade(shell);
         search_query.connect_activate(move |_| {
             if let Some(s) = s.upgrade() {
@@ -331,6 +326,9 @@ impl Sidebar {
         let bind: rows::Bind = Rc::new(move |b, i| {
             let Some(s) = bind_shell.upgrade() else { return };
             let app = s.app.borrow();
+            if list_cursor(&app, SidebarView::Search) == Some(i) {
+                b.add_css_class("tinta-cursor");
+            }
             match app.search.rows.get(i) {
                 Some(SearchRow::File { path, count, collapsed }) => {
                     let rel = app.folder.as_ref().and_then(|f| path.strip_prefix(f).ok()).unwrap_or(path);
@@ -392,6 +390,7 @@ impl Sidebar {
         git_form.set_margin_start(10);
         git_form.set_margin_end(10);
         let git_message = rows::entry(shell, tr("Message"), |t| Message::Git(GitMsg::MessageInput(t)));
+        down_to_list(shell, &git_message, SidebarView::Git);
         let s = Rc::downgrade(shell);
         git_message.connect_activate(move |_| {
             if let Some(s) = s.upgrade() {
@@ -424,6 +423,9 @@ impl Sidebar {
             let Some(s) = bind_shell.upgrade() else { return };
             let app = s.app.borrow();
             let Some((t, e)) = app.active() else { return };
+            if list_cursor(&app, SidebarView::Outline) == Some(i) {
+                b.add_css_class("tinta-cursor");
+            }
             let symbols = symbols_of(e);
             let Some((name, kind, line, depth)) = symbols.get(i) else { return };
             let caret = e.doc.char_to_line(t.cursors.head());
@@ -478,6 +480,7 @@ impl Sidebar {
             git_message,
             git_commit,
             git_list,
+            git_rows: RefCell::new(Vec::new()),
             git_form,
             git_none,
             outline,
@@ -546,8 +549,10 @@ impl Sidebar {
                     format!("{}{plus} {} {} {}", s.total, tr("matches in"), s.results.len(), tr("files"))
                 };
                 self.search_summary.set_label(&summary);
-                let key = rows::hash_of((s.generation, s.rows.len(), s.collapsed.len(), s.total));
-                self.search.set(s.rows.len(), key);
+                let cursor = list_cursor(app, SidebarView::Search);
+                let key = rows::hash_of((s.generation, s.rows.len(), s.collapsed.len(), s.total, cursor));
+                let rebuilt = self.search.set(s.rows.len(), key);
+                follow(&self.search, SidebarView::Search, cursor, rebuilt, &mut last);
             }
             SidebarView::Git => {
                 let g = &app.git;
@@ -557,15 +562,34 @@ impl Sidebar {
                 self.git_commit.set_label(&format!("{} · {}", tr("Commit"), g.branch.clone().unwrap_or_default()));
                 self.git_commit.set_sensitive(!g.message.trim().is_empty());
                 let key = rows::hash_of(g.entries.iter().map(|e| (&e.path, e.index, e.worktree)).collect::<Vec<_>>());
-                if key != last.git {
+                let rebuilt = key != last.git;
+                if rebuilt {
                     last.git = key;
                     self.fill_git(shell, app);
+                }
+                // The keyboard's row: marked, and holding GTK's focus.
+                let cursor = list_cursor(app, SidebarView::Git);
+                if rebuilt || last.list_cursor != cursor.map(|c| (SidebarView::Git, c)) {
+                    for (i, row) in self.git_rows.borrow().iter().enumerate() {
+                        if Some(i) == cursor {
+                            row.add_css_class("tinta-cursor");
+                            let row = row.clone();
+                            glib::idle_add_local_once(move || {
+                                row.grab_focus();
+                            });
+                        } else {
+                            row.remove_css_class("tinta-cursor");
+                        }
+                    }
+                    last.list_cursor = cursor.map(|c| (SidebarView::Git, c));
                 }
             }
             SidebarView::Outline => {
                 let n = app.active().map_or(0, |(_, e)| symbols_of(e).len());
-                let key = app.active().map(|(t, e)| rows::hash_of((e.doc.revision, e.doc.char_to_line(t.cursors.head()), t.doc, e.lsp_symbols.as_ref().map(|(r, l)| (*r, l.len()))))).unwrap_or(0);
-                self.outline.set(n, key);
+                let cursor = list_cursor(app, SidebarView::Outline);
+                let key = app.active().map(|(t, e)| rows::hash_of((e.doc.revision, e.doc.char_to_line(t.cursors.head()), t.doc, e.lsp_symbols.as_ref().map(|(r, l)| (*r, l.len())), cursor))).unwrap_or(0);
+                let rebuilt = self.outline.set(n, key);
+                follow(&self.outline, SidebarView::Outline, cursor, rebuilt, &mut last);
             }
             SidebarView::Debug => {}
         }
@@ -577,6 +601,7 @@ impl Sidebar {
         while let Some(c) = self.git_list.first_child() {
             self.git_list.remove(&c);
         }
+        self.git_rows.borrow_mut().clear();
         let g = &app.git;
         let staged: Vec<&StatusEntry> = g.entries.iter().filter(|e| e.is_staged()).collect();
         let changed: Vec<&StatusEntry> = g.entries.iter().filter(|e| e.is_unstaged()).collect();
@@ -632,6 +657,7 @@ impl Sidebar {
             });
             n.add_controller(click);
             self.git_list.append(&row);
+            self.git_rows.borrow_mut().push(row);
         };
         if !staged.is_empty() {
             heading(format!("{} ({})", tr("Staged Changes"), staged.len()), None);
@@ -686,4 +712,39 @@ fn row_menu(shell: &Rc<Shell>, i: usize, is_dir: bool, w: &gtk::Widget, x: f64, 
         glib::idle_add_local_once(move || p.unparent());
     });
     pop.popup();
+}
+
+/// The row the keyboard is on in `view`'s list, when that's where the keyboard is.
+fn list_cursor(app: &App, view: SidebarView) -> Option<usize> {
+    (app.focus == Focus::List && app.sidebar == Some(view)).then_some(app.list_cursor)
+}
+
+/// Keeps a list's keyboard row in view and focused, which a rebuilt list would drop.
+fn follow(list: &RowList, view: SidebarView, cursor: Option<usize>, rebuilt: bool, last: &mut Last) {
+    let now = cursor.map(|c| (view, c));
+    if now != last.list_cursor || (rebuilt && now.is_some()) {
+        if let Some(i) = cursor {
+            let v = list.view.clone();
+            glib::idle_add_local_once(move || v.scroll_to(i as u32, gtk::ListScrollFlags::FOCUS, None));
+        }
+        last.list_cursor = now;
+    }
+}
+
+/// Down in the field above a list goes into the list.
+fn down_to_list(shell: &Rc<Shell>, field: &gtk::Entry, view: SidebarView) {
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let s = Rc::downgrade(shell);
+    keys.connect_key_pressed(move |_, key, _, mods| {
+        if key == gtk::gdk::Key::Down
+            && !mods.intersects(gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::ALT_MASK)
+            && let Some(s) = s.upgrade()
+        {
+            s.dispatch(Message::ListFocus(view));
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+    field.add_controller(keys);
 }
