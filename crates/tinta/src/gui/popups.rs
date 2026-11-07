@@ -135,9 +135,8 @@ impl Popups {
 
         // The palette: a box at the top of the window, over everything.
         let palette = popup_box();
-        palette.set_halign(gtk::Align::Center);
+        palette.set_halign(gtk::Align::Fill);
         palette.set_margin_top(52);
-        palette.set_size_request(620, -1);
         let palette_entry = rows::entry(shell, "", |t| Message::Palette(PaletteMsg::Input(t)));
         palette_entry.set_margin_start(8);
         palette_entry.set_margin_end(8);
@@ -161,7 +160,9 @@ impl Popups {
         });
         let palette_scroll = gtk::ScrolledWindow::builder().child(&palette_list).propagate_natural_height(true).max_content_height(420).hscrollbar_policy(gtk::PolicyType::Never).build();
         palette.append(&palette_scroll);
-        win.overlay.add_overlay(&palette);
+        // 620 px where there's room, the window's width less a margin where there isn't.
+        let clamp = adw::Clamp::builder().maximum_size(620).tightening_threshold(620).child(&palette).valign(gtk::Align::Start).margin_start(12).margin_end(12).build();
+        win.overlay.add_overlay(&clamp);
         win.register_field(PALETTE_INPUT, &palette_entry);
         *self.inner.borrow_mut() = Some(Inner {
             completion,
