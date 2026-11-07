@@ -19,4 +19,4 @@ sed "s|@bindir@|$prefix/bin|" "data/$id.desktop.in" > "$prefix/share/application
 install -Dm0644 "data/$id.metainfo.xml" "$prefix/share/metainfo/$id.metainfo.xml"
 install -Dm0644 "data/icons/scalable/apps/$id.svg" "$prefix/share/icons/hicolor/scalable/apps/$id.svg"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$prefix/share/applications" || true
-echo "Instalado. Abra \"Tinta (GNOME e COSMIC)\" pelo lançador de aplicativos, ou rode: tinta-gnome [arquivo ou pasta]"
+echo "Instalado. Abra \"Tinta (GTK)\" pelo lançador de aplicativos, ou rode: tinta-gnome [arquivo ou pasta]"

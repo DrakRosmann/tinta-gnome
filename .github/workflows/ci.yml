@@ -1,4 +1,5 @@
 # Testa o núcleo e a interface (sem janela) a cada push e pull request.
+# Num contêiner Fedora: o libadwaita do Ubuntu ainda é antigo demais (o app pede o 1.7).
 name: CI
 
 on:
@@ -8,19 +9,16 @@ on:
 jobs:
   testes:
     runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Rust estável
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Bibliotecas do sistema e um servidor de linguagem para os testes
+      - name: Ferramentas, bibliotecas e um servidor de linguagem e depuradores para os testes
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gdb python3-debugpy \
-            cmake pkg-config libxkbcommon-dev libwayland-dev libexpat1-dev libfontconfig-dev \
-            libfreetype-dev libvulkan-dev clangd fonts-noto-mono fonts-noto-core
+          dnf install -y --setopt=install_weak_deps=False git gcc pkgconf-pkg-config cargo rust \
+            gtk4-devel libadwaita-devel vte291-gtk4-devel clang-tools-extra gdb python3-debugpy \
+            google-noto-sans-mono-fonts
+
+      - uses: actions/checkout@v4
 
       - name: Cache do cargo
         uses: actions/cache@v4
@@ -29,12 +27,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ hashFiles('Cargo.lock') }}
+          key: cargo-fedora-${{ hashFiles('Cargo.lock') }}
 
       - name: Git com identidade para os testes
         run: |
           git config --global user.name CI
           git config --global user.email ci@example.com
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Testes do núcleo
         run: cargo test -p tinta-core

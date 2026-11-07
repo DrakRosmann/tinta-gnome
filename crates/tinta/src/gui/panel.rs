@@ -25,6 +25,7 @@ pub struct Panel {
     pub debug: super::debug::Console,
     last: RefCell<Synced>,
     syncing: Cell<bool>,
+    dark: Cell<Option<bool>>,
 }
 
 #[derive(Default, PartialEq)]
@@ -149,6 +150,7 @@ impl Panel {
             debug,
             last: RefCell::new(Synced::default()),
             syncing: Cell::new(false),
+            dark: Cell::new(None),
         });
         let s = Rc::downgrade(shell);
         panel.problems.connect_row_activated(move |_, row| {
@@ -183,9 +185,25 @@ impl Panel {
         pango::FontDescription::from_string(&format!("{family} 11"))
     }
 
+    /// libadwaita's view colors, and the GNOME palette for the 16 terminal colors.
+    fn paint(term: &vte::Terminal, dark: bool) {
+        let c = |hex: &str| gdk::RGBA::parse(hex).unwrap_or(gdk::RGBA::BLACK);
+        let (fg, bg) = if dark { (c("#ffffff"), c("#1d1d20")) } else { (c("#1e1e20"), c("#ffffff")) };
+        let palette: Vec<gdk::RGBA> = [
+            "#241f31", "#c01c28", "#2ec27e", "#f5c211", "#1e78e4", "#9841bb", "#0ab9dc", "#c0bfbc",
+            "#5e5c64", "#ed333b", "#57e389", "#f8e45c", "#51a1ff", "#c061cb", "#4fd2fd", "#f6f5f4",
+        ]
+        .iter()
+        .map(|h| c(h))
+        .collect();
+        let refs: Vec<&gdk::RGBA> = palette.iter().collect();
+        term.set_colors(Some(&fg), Some(&bg), &refs);
+    }
+
     pub fn spawn_terminal(&self, shell: &Rc<Shell>, id: u64, cwd: &Path) {
         let term = vte::Terminal::new();
         term.set_font(Some(&Self::mono_font()));
+        Self::paint(&term, adw::StyleManager::default().is_dark());
         term.set_scrollback_lines(10_000);
         term.set_vexpand(true);
         term.set_hexpand(true);
@@ -290,6 +308,13 @@ impl Panel {
             return;
         }
         let view = app.panel.map(view_name);
+        let dark = adw::StyleManager::default().is_dark();
+        if self.dark.get() != Some(dark) {
+            for t in self.terms.borrow().values() {
+                Self::paint(t, dark);
+            }
+            self.dark.set(Some(dark));
+        }
         let mut last = self.last.borrow_mut();
         if last.view != view {
             if let Some(v) = view {

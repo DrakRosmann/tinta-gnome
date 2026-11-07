@@ -1,6 +1,6 @@
 //! Opening and moving around in side-by-side diffs.
 
-use super::{App, Focus, Message};
+use super::{App, Focus};
 use crate::i18n::tr;
 use crate::state::{DiffData, DocEntry, TabId, TabKind};
 use crate::ui::diff_view::DiffEvent;

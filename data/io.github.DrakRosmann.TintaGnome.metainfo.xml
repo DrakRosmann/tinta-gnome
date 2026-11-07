@@ -7,10 +7,10 @@
     <name>DrakRosmann</name>
   </developer>
   <name>Tinta</name>
-  <summary>A code editor that looks at home on GNOME and on COSMIC</summary>
-  <summary xml:lang="pt-BR">Um editor de código com a cara do GNOME e do COSMIC</summary>
+  <summary>A code editor for GNOME, in GTK 4 and libadwaita</summary>
+  <summary xml:lang="pt-BR">Um editor de código para o GNOME, em GTK 4 e libadwaita</summary>
   <description>
-    <p>A fast code editor written in Rust, in the style of the COSMIC™ desktop, with the features you would expect from Visual Studio Code and Sublime Text.</p>
+    <p>A fast code editor written in Rust with GTK 4 and libadwaita: syntax highlighting, language servers, a debugger, git, a terminal and Vim mode.</p>
     <ul>
       <li>Syntax highlighting for 220 grammars, with 14 color themes</li>
       <li>Multiple cursors, column selection, code folding, minimap, sticky scroll</li>

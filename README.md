@@ -1,51 +1,37 @@
-# Tinta para GNOME e COSMIC
+# Tinta para GNOME
 
-Um fork do [Tinta](https://github.com/DrakRosmann/cosmic-ext-tinta), o editor de código feito com o
-libcosmic, que **toma a cara do ambiente onde roda**: no COSMIC continua igual ao original; no GNOME
-usa o visual do GNOME.
+Um editor de código para o GNOME, em Rust com **GTK 4 e libadwaita**. É um fork do
+[Tinta](https://github.com/DrakRosmann/cosmic-ext-tinta), feito com o libcosmic: o motor é o mesmo,
+e a interface foi reescrita com os componentes do GNOME.
 
-![No GNOME: cores do Adwaita, título no meio do cabeçalho e o menu atrás de um botão](assets/screenshot-gnome.png)
+![Depurando um programa em C](assets/depurador.png)
 
-![O menu principal, à direita, como nos aplicativos do GNOME](assets/screenshot-gnome-menu.png)
+![Busca na pasta, prévia de Markdown ao lado e o terminal](assets/busca-e-markdown.png)
 
-## O que muda no GNOME
+![Busca no arquivo e o terminal VTE](assets/terminal-e-busca.png)
 
-Continua sendo o mesmo aplicativo, feito com o libcosmic, e não um aplicativo GTK. O que ele faz é
-ler as preferências do GNOME e se vestir com elas:
+## Feito com os componentes do GNOME
 
-- **Cores:** as superfícies do libadwaita (fundo, barra lateral, menus), claro ou escuro conforme o
-  GNOME, e a **cor de destaque** escolhida nas configurações do sistema
-- **Formas:** os cantos do Adwaita, 6 nos botões e 12 nos menus
-- **Fontes:** a da interface e a de largura fixa do GNOME (Adwaita Sans e Adwaita Mono, por
-  padrão); uma fonte escolhida nas configurações do editor continua valendo
-- **Ícones:** o tema de ícones do GNOME
-- **Cabeçalho:** o título no meio, todos os menus atrás de um botão no fim, e os botões de
-  minimizar e maximizar só se o GNOME estiver configurado para mostrá-los
-- **Ao vivo:** trocar o modo escuro, a cor de destaque ou a fonte de largura fixa no GNOME muda o
-  editor aberto, sem reiniciar
+- Janela, cabeçalho e menu principal do libadwaita; abas em `AdwTabView`, que dá para reordenar
+  arrastando
+- Preferências em `AdwPreferencesDialog`, com busca; avisos em `AdwToast`; diálogos em
+  `AdwAlertDialog`; "Sobre" em `AdwAboutDialog`
+- Terminal VTE, o mesmo do Console e do GNOME Terminal
+- Árvore de arquivos e resultados de busca em `GtkListView`: só as linhas visíveis existem
+- Segue o claro e o escuro do sistema, a **cor de destaque** e a fonte de largura fixa do GNOME, e
+  muda junto quando elas mudam
+- Uma janela só: `tinta-gnome arquivo` abre na janela que já está aberta (pelo `GtkApplication`)
+- Acentos com teclas mortas e métodos de entrada pelo GTK. Em ambientes sem método de entrada, o
+  editor compõe sozinho, então `´` e `a` ainda dão `á`
 
-Ele decide pelo `XDG_CURRENT_DESKTOP`. Em outros ambientes (KDE, Sway) fica com o visual do COSMIC.
-Nas configurações, "Estilo da interface" deixa escolher: seguir o ambiente, COSMIC ou GNOME. Voltar do
-GNOME para o COSMIC com o editor aberto troca as cores na hora; fontes e ícones, ao reiniciar.
+O texto é um widget próprio desenhado com o GSK, e não o `GtkSourceView`: é o que mantém os
+recursos do editor, como múltiplos cursores, seleção em coluna, dobras pela árvore de sintaxe,
+minimapa, modo Vim e a margem de breakpoints.
 
-**O que não muda:** os controles continuam sendo os do libcosmic. Botões, listas, menus e caixas
-de texto têm as cores e os cantos do GNOME, mas não o comportamento exato do GTK. Os botões da
-janela ficam sempre à direita, mesmo que o GNOME esteja configurado para colocá-los à esquerda.
+Ele roda em qualquer ambiente com GTK 4. No COSMIC, por exemplo, segue o tema que o COSMIC passa
+para os aplicativos GTK.
 
-Este fork usa nome e pastas próprios (`tinta-gnome`, `~/.config/tinta-gnome`), então pode ser
-instalado ao lado do Tinta original.
-
-![Tinta com a árvore de arquivos, o editor e o terminal](assets/screenshot.png)
-
-![Sugestões e problemas vindos do servidor de linguagem](assets/screenshot-lsp.png)
-
-![Depurando um programa em C: variáveis, pilha de chamadas e o que mudou em destaque](assets/screenshot-debug.png)
-
-![Diff lado a lado, com o trecho alterado em destaque](assets/screenshot-diff.png)
-
-![O tema claro, com o editor dividido](assets/screenshot-light.png)
-
-## O que ele faz, igual ao original
+## O que ele faz
 
 **Edição**
 
@@ -65,7 +51,7 @@ instalado ao lado do Tinta original.
 
 - Destaque de sintaxe para 220 gramáticas, incremental: digitar no meio de um arquivo de
   300 mil linhas reprocessa só o que mudou
-- 13 temas de cores, além do COSMIC, que acompanha o claro e o escuro do sistema
+- 13 temas de cores para o código, além do padrão, que acompanha o claro e o escuro do sistema
 - Parênteses coloridos por profundidade, ignorando strings e comentários
 - Minimapa, guias de indentação, rolagem aderente, réguas, espaços visíveis
 - Dobra de código, quebra de linha, números de linha absolutos ou relativos, a partir da árvore de
@@ -170,8 +156,10 @@ cd tinta-gnome
 ./install.sh          # instala em ~/.local
 ```
 
-O `deps.sh` instala o que faltar com `apt`, `dnf` ou `pacman`. Depois é abrir "Tinta" no lançador,
-ou rodar `tinta-gnome [arquivo ou pasta]`.
+Precisa do GTK 4.18, do libadwaita 1.7 e do VTE para GTK 4 (Fedora 42, Ubuntu 25.10, Debian 14 ou
+mais novos). O `deps.sh` instala o que faltar com `apt`, `dnf` ou `pacman`. Depois é abrir "Tinta"
+no lançador, ou rodar `tinta-gnome [arquivo ou pasta]`. Ele instala ao lado do Tinta original, com
+nome, ícone e configurações próprios.
 
 Para ter inteligência de código, instale o servidor da sua linguagem: `rustup component add
 rust-analyzer`, `dnf install clang-tools-extra` e assim por diante. Ele é encontrado no `PATH`.
@@ -279,9 +267,10 @@ O projeto é dividido para que quase tudo possa ser testado sem abrir janela:
   [syntect](https://github.com/trishume/syntect), estrutura com
   [tree-sitter](https://tree-sitter.github.io/), busca, git (pelo comando `git`), clientes LSP e DAP,
   o modo Vim, snippets, atalhos.
-- **`crates/tinta`**: a interface em [libcosmic](https://github.com/pop-os/libcosmic). O texto é um
-  widget próprio, desenhado em uma grade de caracteres para repintar sem refazer o layout. O resto
-  (abas, menus, paleta, configurações, diálogos) são os widgets do próprio COSMIC.
+- **`crates/tinta`**: o aplicativo. Em `app/`, o estado e tudo o que acontece com ele: cada
+  mensagem passa por um `update`, que devolve uma lista de efeitos (abrir um diálogo, copiar,
+  focar um campo). Em `gui/`, o lado GTK: executa os efeitos e põe os widgets em dia com o estado.
+  O texto e o diff são widgets próprios, desenhados numa grade de caracteres com o GSK e o Pango.
 - **`crates/tinta-vkbd`**: digita em um compositor pelo protocolo de teclado virtual do Wayland,
   para os testes de ponta a ponta.
 - **`crates/tinta-xptr`**: ponteiro real e capturas da tela real, para os mesmos testes.
@@ -293,13 +282,15 @@ cargo test                                     # núcleo e interface, sem janela
 cargo test --release large_file -- --ignored --nocapture   # mede um arquivo de 300 mil linhas
 ```
 
-Os testes da interface montam a árvore real de widgets e passam por ela eventos de mouse e teclado,
-desenhando cada quadro em um renderizador de software. O cliente LSP é testado contra o clangd de
+Os testes da interface não abrem janela: o teclado e os comandos vão direto ao `update`, e o mouse
+passa pelo tratamento de eventos do próprio editor, nas mesmas posições em que ele desenha. O
+cliente LSP é testado contra o clangd de
 verdade quando ele está instalado, e o depurador contra o gdb e o debugpy, compilando e rodando
 programas pequenos. Quem não tem essas ferramentas vê esses testes passarem sem fazer nada.
 
-Para ver o aplicativo rodando, `tests/e2e/run.sh` abre um `cosmic-comp` aninhado, com configuração
-própria, e dirige o app por um script que também tira capturas de tela:
+Para ver o aplicativo rodando, `tests/e2e/gnome.sh` abre um **GNOME Shell de verdade**, sem tela,
+num D-Bus próprio e com as preferências do GNOME num arquivo próprio, nunca nas suas, e dirige o app
+por um script que também tira capturas de tela:
 
 ```sh
 cargo build --workspace
@@ -310,26 +301,19 @@ input salvar
 shot /tmp/paleta.png
 quit
 FIM
-tests/e2e/run.sh /tmp/passos.txt
+tests/e2e/gnome.sh /tmp/passos.txt color-scheme=prefer-dark
 ```
 
 Os passos estão descritos em [`script.rs`](crates/tinta/src/app/script.rs).
 
-`tests/e2e/gnome.sh` roda o editor dentro de um **GNOME Shell de verdade**, sem tela, num D-Bus
-próprio e com as preferências do GNOME num arquivo próprio, nunca nas suas:
-
-```sh
-tests/e2e/gnome.sh /tmp/passos.txt color-scheme=prefer-dark accent-color=teal
-```
-
-`tests/e2e/pointer.sh` faz o mesmo com um **ponteiro de verdade**: o compositor roda dentro de um
-Xwayland próprio, e o `tinta-xptr` move, clica e captura os pixels da tela, sem mexer no cursor do
-desktop. Foi assim que apareceram bugs que nenhum outro teste pegava, como clicar num item de menu
-fechar o aplicativo.
+Teclado e ponteiro de verdade precisam de um compositor que aceite os dois: `tests/e2e/run.sh`
+digita pelo teclado virtual do Wayland (`tinta-vkbd`), com teclas mortas e tudo, num `cosmic-comp`
+aninhado; `tests/e2e/pointer.sh` move e clica pelo `tinta-xptr` dentro de um Xwayland próprio, e
+captura os pixels reais da tela. Nenhum dos dois mexe no seu teclado, no seu cursor ou na sua sessão.
 
 ## Licença
 
-GPL-3.0-only. COSMIC é uma marca registrada da System76; este é um projeto independente.
+GPL-3.0-only. Este é um projeto independente, sem ligação com o GNOME.
 
 ## O que falta
 
@@ -338,6 +322,6 @@ GPL-3.0-only. COSMIC é uma marca registrada da System76; este é um projeto ind
   cursor" ou breakpoints que só registram no console, e o programa depurado não recebe o que se digita
   (a entrada padrão). Para isso, use o terminal.
 - No Vim: sem `:global`, `:normal`, mapeamentos próprios nem `.vimrc`.
-- Sem navegação pelo teclado na árvore de arquivos, e arrastar abas ainda não reordena: use
-  `Ctrl+Shift+PgUp` e `Ctrl+Shift+PgDn`.
+- Sem navegação pelo teclado na árvore de arquivos, e uma aba não passa de uma divisão para outra
+  arrastando. As divisões lado a lado têm a mesma largura: ainda não dá para ajustar.
 - A quebra de linha fica desligada em arquivos acima de 4 milhões de caracteres.

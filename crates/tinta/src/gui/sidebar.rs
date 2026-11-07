@@ -130,10 +130,11 @@ pub fn breadcrumbs(app: &App, group: usize) -> String {
     let Some(t) = app.groups.get(group).and_then(|g| g.active_tab()).and_then(|id| app.tabs.get(&id)) else { return String::new() };
     let Some(e) = app.docs.get(&t.doc) else { return String::new() };
     let mut parts: Vec<String> = match &e.doc.path {
-        Some(p) => {
-            let rel = app.folder.as_ref().and_then(|f| p.strip_prefix(f).ok()).unwrap_or(p);
-            rel.iter().map(|c| c.to_string_lossy().into_owned()).collect()
-        }
+        // Inside the open folder, the way down to the file; anywhere else, just its name.
+        Some(p) => match app.folder.as_ref().and_then(|f| p.strip_prefix(f).ok()) {
+            Some(rel) => rel.iter().map(|c| c.to_string_lossy().into_owned()).collect(),
+            None => vec![e.doc.file_name()],
+        },
         None => vec![e.doc.file_name()],
     };
     parts.extend(current_symbols(e, t));

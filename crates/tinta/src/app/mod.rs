@@ -27,10 +27,8 @@ pub use tasks::{TaskMsg, TaskPanel};
 pub use vim::{VIM_LINE, VimMsg};
 pub use search::{SearchMsg, SearchPanel, SearchRow, SEARCH_INPUT};
 
-use crate::bus;
 use crate::fx;
 use crate::gfx::Modifiers;
-use crate::i18n::tr;
 use crate::state::{DocEntry, DocId, Group, Metrics, Tab, TabId};
 use crate::ui;
 use crate::ui::editor_view::EditorEvent;
@@ -147,7 +145,6 @@ pub enum FindMsg {
 #[derive(Debug, Clone)]
 pub enum SettingMsg {
     UiTheme(AppTheme),
-    InterfaceStyle(tinta_core::desktop::InterfaceStyle),
     SyntaxTheme(String),
     FontFamily(String),
     FontSize(f32),

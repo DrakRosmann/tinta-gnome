@@ -1,6 +1,6 @@
 //! The file tree.
 
-use super::{App, DialogState, Message};
+use super::{App, DialogState};
 use crate::fx::{self, Task};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};

@@ -1,7 +1,7 @@
 //! Two versions of a file, side by side, scrolling together.
 
 use super::editor_view::{Palette, text_primitive};
-use crate::gfx::{Border, Color, Event, Font, Point, Quad, Rectangle, Shell, Size, Text, mouse};
+use crate::gfx::{Border, Color, Event, Font, Point, Quad, Rectangle, Shell, Size, mouse};
 use crate::state::{DiffData, Metrics};
 use std::time::{Duration, Instant};
 

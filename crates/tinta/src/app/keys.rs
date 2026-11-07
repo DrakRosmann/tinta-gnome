@@ -1,6 +1,6 @@
 //! From raw key events to commands or text.
 
-use super::{App, Focus, Message};
+use super::{App, Focus};
 use crate::fx::{self, Task};
 use crate::gfx::Modifiers;
 use crate::i18n::tr;

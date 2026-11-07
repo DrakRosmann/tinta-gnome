@@ -730,7 +730,6 @@ impl App {
     pub fn on_setting(&mut self, m: SettingMsg) -> Task {
         let mut extra = Task::none();
         match m {
-            SettingMsg::InterfaceStyle(_) => {}
             SettingMsg::UiTheme(t) => {
                 self.settings.ui_theme = t;
                 extra = self.apply_ui_theme();

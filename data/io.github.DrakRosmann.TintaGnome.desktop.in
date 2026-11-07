@@ -1,15 +1,14 @@
 [Desktop Entry]
-Name=Tinta (GNOME and COSMIC)
-Name[pt_BR]=Tinta (GNOME e COSMIC)
+Name=Tinta (GTK)
 GenericName=Code Editor
 GenericName[pt_BR]=Editor de código
-Comment=A code editor that looks at home on GNOME and on COSMIC, with syntax highlighting, language servers, git and a terminal
-Comment[pt_BR]=Um editor de código com a cara do GNOME no GNOME e do COSMIC no COSMIC, com destaque de sintaxe, servidores de linguagem, git e terminal
+Comment=A code editor for GNOME, in GTK 4 and libadwaita, with syntax highlighting, language servers, git and a terminal
+Comment[pt_BR]=Um editor de código para o GNOME, em GTK 4 e libadwaita, com destaque de sintaxe, servidores de linguagem, git e terminal
 Type=Application
 Exec=@bindir@/tinta-gnome %F
 Terminal=false
-Categories=GNOME;COSMIC;Development;TextEditor;IDE;
-Keywords=GNOME;COSMIC;Editor;Code;Text;Programming;Rust;Sublime;VSCode;
+Categories=GNOME;GTK;Development;TextEditor;IDE;
+Keywords=GNOME;GTK;Editor;Code;Text;Programming;Rust;Sublime;VSCode;
 MimeType=text/plain;text/x-csrc;text/x-chdr;text/x-c++src;text/x-rust;text/x-python;text/markdown;application/json;application/x-shellscript;application/xml;text/html;text/css;application/javascript;application/toml;
 StartupNotify=true
 StartupWMClass=io.github.DrakRosmann.TintaGnome

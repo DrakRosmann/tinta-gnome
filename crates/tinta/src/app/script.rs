@@ -213,6 +213,8 @@ impl App {
             "toast": self.toast,
             "folder": self.folder,
             "focus": format!("{:?}", self.focus),
+            "settings_open": self.settings_open,
+            "dialog": self.dialog.as_ref().map(|d| format!("{d:?}")),
             "font_size": self.settings.font_size,
             "cell_w": self.metrics.cell_w,
             "lsp": self.lsp.keys().collect::<Vec<_>>(),

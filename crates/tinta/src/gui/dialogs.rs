@@ -8,7 +8,6 @@ use crate::i18n::tr;
 use adw::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use tinta_core::desktop::InterfaceStyle;
 use tinta_core::settings::{AppTheme, AutoSave, CursorStyle, LineNumbers, Settings, Whitespace};
 
 #[derive(Default)]
@@ -174,6 +173,7 @@ impl Dialogs {
 
     fn sync_prefs(&self, win: &Window, shell: &Rc<Shell>, app: &App) {
         let showing = self.prefs.borrow().is_some();
+
         if app.settings_open && !showing {
             let d = prefs_dialog(shell, &app.settings, app);
             let s = Rc::downgrade(shell);
@@ -370,6 +370,5 @@ fn prefs_dialog(shell: &Rc<Shell>, st: &Settings, app: &App) -> adw::Preferences
     }
     page.add(&files_group);
     d.add(&page);
-    let _ = InterfaceStyle::Auto;
     d
 }

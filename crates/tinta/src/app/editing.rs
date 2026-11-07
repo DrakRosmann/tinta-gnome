@@ -1,6 +1,6 @@
 //! Typing, the mouse in the text, find-as-you-type and keeping the caret in view.
 
-use super::{App, FindMsg, Focus, Message};
+use super::{App, FindMsg, Focus};
 use crate::state::TabKind;
 use crate::ui::editor_view::{EditorEvent, Geometry, PressButton};
 use crate::fx::{self, Task};

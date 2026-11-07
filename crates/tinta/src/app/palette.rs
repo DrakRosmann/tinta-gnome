@@ -1,6 +1,6 @@
 //! The command palette and every other quick pick built on it.
 
-use super::{App, Focus, KeyEv, Message};
+use super::{App, Focus, KeyEv};
 use crate::i18n::tr;
 use crate::fx::{self, Task};
 use std::path::PathBuf;
