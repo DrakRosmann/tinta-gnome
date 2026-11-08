@@ -17,6 +17,7 @@
       <li>Language servers: completion, hover, go to definition, rename, formatting, quick fixes</li>
       <li>Find and replace with regular expressions, in the file or across a folder</li>
       <li>Git: changes in the gutter, staging, commits, push and pull, blame</li>
+      <li>Run the file in front with one key, in about 70 languages, and send lines to a REPL</li>
       <li>Command palette, quick open, splits, an integrated terminal, Markdown preview</li>
     </ul>
   </description>

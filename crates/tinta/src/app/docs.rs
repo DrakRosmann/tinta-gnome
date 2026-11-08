@@ -489,6 +489,8 @@ impl App {
             expanded: self.explorer.expanded.iter().cloned().collect(),
             breakpoints: self.debug.breakpoints.clone(),
             watches: self.debug.watches.clone(),
+            // Untitled text runs from a folder that goes away with the editor.
+            run_args: self.runner.args.iter().filter(|(p, _)| p.is_file() && !p.starts_with(super::run_out_dir())).map(|(p, a)| (p.clone(), a.clone())).collect(),
         }
     }
 
@@ -510,6 +512,8 @@ impl App {
             self.debug.breakpoints = s.breakpoints.clone();
             self.debug.breakpoints.retain(|p, _| p.is_file());
             self.debug.watches = s.watches.clone();
+            self.runner.args = s.run_args.clone();
+            self.runner.args.retain(|p, _| p.is_file());
             if let Some(f) = s.folder.clone().filter(|f| f.is_dir()) {
                 tasks.push(self.open_folder(f));
                 for p in &s.expanded {

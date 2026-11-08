@@ -27,7 +27,12 @@ pub enum Effect {
     TermSpawn { id: u64, cwd: PathBuf },
     /// A terminal over a pseudo-terminal opened elsewhere, the debugged program's.
     TermAttach { id: u64, master: std::os::fd::OwnedFd },
+    /// A terminal running `argv` instead of the shell: a program run from the editor, a REPL.
+    TermRun { id: u64, cwd: PathBuf, argv: Vec<String> },
+    /// Pasted, as the clipboard would be.
     TermInput { id: u64, text: String },
+    /// Typed as it is: Enter, Ctrl+C.
+    TermFeed { id: u64, text: String },
     TermCopy(u64),
     TermPaste(u64),
     TermKill(u64),

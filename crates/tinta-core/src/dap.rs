@@ -288,9 +288,10 @@ fn resolved(config: &LaunchConfig, root: &Path, file: Option<&Path>) -> Result<P
     Ok(Plan { root: root.to_path_buf(), config: c, program_from: ProgramFrom::Known })
 }
 
-/// The project's configuration if it has one, otherwise what its files and language suggest.
-pub fn plan(root: &Path, file: Option<&Path>, language: &str, selected: Option<&str>) -> Result<Plan, String> {
-    let configs = load_configs(root)?;
+/// The project's configuration if it has one and may use it, otherwise what its files and
+/// language suggest.
+pub fn plan(root: &Path, file: Option<&Path>, language: &str, selected: Option<&str>, use_configs: bool) -> Result<Plan, String> {
+    let configs = if use_configs { load_configs(root)? } else { Vec::new() };
     if !configs.is_empty() {
         let c = selected.and_then(|n| configs.iter().find(|c| c.name == n)).unwrap_or(&configs[0]);
         return resolved(c, root, file);
@@ -1693,18 +1694,18 @@ mod tests {
         )
         .unwrap();
         let file = dir.join("src/m.c");
-        let p = plan(&dir, Some(&file), "C", None).unwrap();
+        let p = plan(&dir, Some(&file), "C", None, true).unwrap();
         assert_eq!(p.config.kind, "gdb");
         assert_eq!(p.config.program, dir.join("bin/a").to_string_lossy());
         assert_eq!(p.config.cwd, dir.join("sub").to_string_lossy());
         assert_eq!(p.config.args, vec![file.to_string_lossy().to_string()]);
         assert_eq!(p.config.build.as_deref(), Some(format!("make -C {}", dir.display()).as_str()));
-        let p = plan(&dir, Some(&file), "C", Some("dois")).unwrap();
+        let p = plan(&dir, Some(&file), "C", Some("dois"), true).unwrap();
         assert_eq!(p.config.kind, "python");
         assert_eq!(p.config.program, dir.join("src/m.py").to_string_lossy());
         // Without a type there's nothing to run it with, and it says so.
         std::fs::write(dir.join(LAUNCH_PATH), r#"[{ "name": "x", "program": "a" }]"#).unwrap();
-        assert!(plan(&dir, None, "C", None).unwrap_err().contains("type"));
+        assert!(plan(&dir, None, "C", None, true).unwrap_err().contains("type"));
     }
 
     #[test]
@@ -1713,19 +1714,19 @@ mod tests {
         let c = dir.join("a b.c");
         std::fs::write(&c, "").unwrap();
         if native_kind().is_ok() {
-            let p = plan(&dir, Some(&c), "C", None).unwrap();
+            let p = plan(&dir, Some(&c), "C", None, true).unwrap();
             let build = p.config.build.clone().unwrap();
             assert!(build.starts_with("cc -g -O0") && build.contains(&format!("'{}'", c.display())), "{build}");
             assert!(p.config.program.ends_with("/a b"));
             std::fs::write(dir.join("Makefile"), "").unwrap();
-            let p = plan(&dir, Some(&c), "C", None).unwrap();
+            let p = plan(&dir, Some(&c), "C", None, true).unwrap();
             assert_eq!(p.config.build.as_deref(), Some("make"));
             assert_eq!(p.program_from, ProgramFrom::NewestExecutable);
             std::fs::write(dir.join("Cargo.toml"), "").unwrap();
-            let p = plan(&dir, Some(&dir.join("m.rs")), "Rust", None).unwrap();
+            let p = plan(&dir, Some(&dir.join("m.rs")), "Rust", None, true).unwrap();
             assert_eq!(p.config.build.as_deref(), Some("cargo build"));
         }
-        assert!(plan(&dir, None, "Markdown", None).is_err() || dir.join("Cargo.toml").exists());
+        assert!(plan(&dir, None, "Markdown", None, true).is_err() || dir.join("Cargo.toml").exists());
     }
 
     #[test]

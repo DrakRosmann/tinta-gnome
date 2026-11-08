@@ -293,6 +293,15 @@ impl App {
                 }
                 return Task::batch(t);
             }
+            C::RunFile => return self.run_file(),
+            C::RunWithArgs => return self.run_with_args(),
+            C::RunRerun => return self.run_rerun(),
+            C::RunStop => return self.run_stop(),
+            C::RunSelection => return self.run_selection(),
+            C::RunOpenRepl => return self.open_repl(),
+            C::RunConfigure => return self.run_configure(),
+            C::TrustFolder => return self.trust_folder(true),
+            C::UntrustFolder => return self.trust_folder(false),
             C::DebugStart => return self.debug_start(false),
             C::DebugStop => self.debug_stop(),
             C::DebugRestart => return self.debug_restart(),
@@ -844,6 +853,7 @@ impl App {
                 let d = self.dialog.take();
                 match d {
                     Some(DialogState::CloseUnsaved(id)) => self.close_tab(id),
+                    Some(DialogState::TrustFolder(root, _, then)) => self.answer_trust(root, false, then),
                     Some(DialogState::QuitUnsaved) => {
                         for e in self.docs.values_mut() {
                             e.doc.mark_saved();
@@ -881,6 +891,8 @@ impl App {
                         Task::none()
                     }
                     Some(DialogState::ConfirmDiscard(entry)) => self.git_discard(entry),
+                    Some(DialogState::RunArgs(path)) => self.set_run_args(path, input),
+                    Some(DialogState::TrustFolder(root, _, then)) => self.answer_trust(root, true, then),
                     _ => Task::none(),
                 }
             }

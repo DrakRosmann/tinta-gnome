@@ -49,7 +49,7 @@ pub struct Window {
     split: adw::OverlaySplitView,
     /// Says when the file's language has no server installed, and how to get one.
     banner: adw::Banner,
-    /// The language the banner is about, for its button.
+    /// What the banner is about, for its button: a language, or `run:` and a language.
     banner_lang: Rc<RefCell<String>>,
     right: gtk::Paned,
     groups_box: gtk::Box,
@@ -102,6 +102,7 @@ impl Window {
         header.set_title_widget(Some(&title));
         let sidebar_btn = icon_button("sidebar-show-symbolic", Command::ToggleSidebar, shell);
         header.pack_start(&sidebar_btn);
+        header.pack_start(&icon_button("media-playback-start-symbolic", Command::RunFile, shell));
         let menu = gtk::MenuButton::builder().icon_name("open-menu-symbolic").primary(true).tooltip_text(tr("Main Menu")).build();
         menu.set_menu_model(Some(&super::menu::main_menu(&shell.app.borrow())));
         header.pack_end(&menu);
@@ -485,7 +486,7 @@ impl Window {
             self.toolbar.set_reveal_bottom_bars(!app.zen);
             last.zen = Some(app.zen);
         }
-        match app.lsp_hint() {
+        match app.banner_hint() {
             Some((lang, text, has_command)) => {
                 if self.banner.title() != text {
                     self.banner.set_title(&text);

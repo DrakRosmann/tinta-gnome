@@ -104,6 +104,8 @@ pub struct Settings {
     pub show_hidden_files: bool,
     pub lsp_enabled: bool,
     pub lsp_servers: HashMap<String, LspServer>,
+    /// How Ctrl+F5 runs files, by language or `.extension`, before the built-in table.
+    pub run_commands: crate::run::UserRunners,
     pub scroll_speed: f32,
     pub terminal_shell: String,
     pub terminal_font_size: f32,
@@ -152,6 +154,7 @@ impl Default for Settings {
             show_hidden_files: true,
             lsp_enabled: true,
             lsp_servers: HashMap::new(),
+            run_commands: HashMap::new(),
             scroll_speed: 3.0,
             terminal_shell: String::new(),
             terminal_font_size: 13.0,
