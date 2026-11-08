@@ -93,6 +93,22 @@ impl Dialogs {
             ),
             DialogState::SetValue(row) => (format!("{}: {}", tr("New value"), row.name), String::new(), Some("42"), "OK", false, None),
             DialogState::ConfirmDiscard(e) => (e.path.clone(), tr("Discard changes to this file? This cannot be undone.").into(), None, "Discard Changes", true, None),
+            DialogState::RunArgs(p) => (
+                format!("{}: {}", tr("Arguments"), file_of(p)),
+                tr("As in a terminal: quotes, < input.txt and | work. Kept for this file.").into(),
+                Some("--verbose < input.txt"),
+                "Run",
+                false,
+                None,
+            ),
+            DialogState::TrustFolder(root, file, _) => {
+                let body = if crate::i18n::is_portuguese() {
+                    format!("{} tem o {file}, que roda comandos no seu computador. Confie só se você sabe de onde esta pasta veio. Sem confiar, o Tinta ignora os arquivos .tinta dela nesta sessão.", root.display())
+                } else {
+                    format!("{} has {file}, which runs commands on your computer. Trust it only if you know where this folder came from. Not trusted, Tinta ignores its .tinta files this session.", root.display())
+                };
+                (tr("Trust this folder?").into(), body, None, "Trust", false, Some("Don't Trust"))
+            }
             DialogState::About | DialogState::Shortcuts => unreachable!(),
         };
         let d = adw::AlertDialog::new(Some(&title), (!body.is_empty()).then_some(body.as_str()));
@@ -104,6 +120,12 @@ impl Dialogs {
         d.add_response("primary", tr(primary));
         d.set_response_appearance("primary", if destructive { adw::ResponseAppearance::Destructive } else { adw::ResponseAppearance::Suggested });
         d.set_default_response(Some("primary"));
+        // Enter must not be what trusts a folder.
+        if matches!(state, DialogState::TrustFolder(..)) {
+            d.set_response_appearance("secondary", adw::ResponseAppearance::Default);
+            d.set_response_appearance("primary", adw::ResponseAppearance::Default);
+            d.set_default_response(Some("cancel"));
+        }
         d.set_close_response("cancel");
         if let Some(ph) = input {
             let e = rows::entry(shell, tr(ph), |t| Message::Dialog(DialogMsg::Input(t)));

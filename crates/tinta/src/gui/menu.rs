@@ -185,6 +185,17 @@ pub fn main_menu(app: &App) -> gio::Menu {
         ),
     );
     menu.append_submenu(
+        Some(tr("Run")),
+        &submenu(
+            km,
+            &[
+                &[C::RunFile, C::RunWithArgs, C::RunRerun, C::RunStop],
+                &[C::RunSelection, C::RunOpenRepl],
+                &[C::RunConfigure, C::TrustFolder, C::UntrustFolder],
+            ],
+        ),
+    );
+    menu.append_submenu(
         Some(tr("Debug")),
         &submenu(
             km,
@@ -209,6 +220,7 @@ pub fn editor_menu(app: &App) -> gio::Menu {
         &[
             &[C::GoToDefinition, C::FindReferences, C::Rename, C::CodeAction, C::FormatDocument],
             &[C::Cut, C::Copy, C::Paste],
+            &[C::RunFile, C::RunSelection],
             &[C::ToggleBreakpoint, C::RunToCursor, C::ToggleComment, C::AddNextOccurrence, C::SelectAllOccurrences],
             &[C::CommandPalette],
         ],

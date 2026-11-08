@@ -32,7 +32,7 @@ fn terminal_passes(c: Command, s: &Stroke) -> bool {
     if !s.ctrl && !s.alt && s.key.starts_with('f') && s.key.len() > 1 {
         return matches!(c, C::CommandPalette | C::ToggleFullscreen);
     }
-    matches!(c, C::ToggleTerminal | C::TogglePanel | C::ToggleSidebar | C::QuickOpen | C::NextTab | C::PrevTab | C::CommandPalette | C::OpenSettings)
+    matches!(c, C::ToggleTerminal | C::TogglePanel | C::ToggleSidebar | C::QuickOpen | C::NextTab | C::PrevTab | C::CommandPalette | C::OpenSettings | C::RunFile | C::RunRerun | C::RunStop)
 }
 
 impl App {
@@ -122,6 +122,10 @@ impl App {
         };
         match self.keymap.press(chosen.clone()) {
             KeyResult::Run(c) => {
+                // Shift+Enter where there's no REPL to send code to is the key it always was.
+                if c == Command::RunSelection && self.focus == Focus::Editor && !self.has_repl() {
+                    return self.editor_key(&ev);
+                }
                 if self.focus == Focus::Terminal {
                     if chosen.ctrl && chosen.shift && chosen.key == "c" {
                         return self.terminal_copy();

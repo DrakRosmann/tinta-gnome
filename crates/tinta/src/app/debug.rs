@@ -115,7 +115,12 @@ impl App {
             Some((_, e)) => (e.doc.path.clone(), e.doc.language.name.clone()),
             None => (None, String::new()),
         };
-        let mut plan = match dap::plan(&root, file.as_deref(), &language, self.debug.selected.as_deref()) {
+        let then = if stop_on_entry { tinta_core::keymap::Command::RunToCursor } else { tinta_core::keymap::Command::DebugStart };
+        let own = match self.project_files_ok(&root, dap::LAUNCH_PATH, then) {
+            Ok(b) => b,
+            Err(t) => return t,
+        };
+        let mut plan = match dap::plan(&root, file.as_deref(), &language, self.debug.selected.as_deref(), own) {
             Ok(p) => p,
             Err(e) => return self.debug_problem(e),
         };
@@ -340,6 +345,11 @@ impl App {
 
     pub fn debug_pick_config(&mut self) -> Task {
         let Some(root) = self.task_root() else { return self.toast(tr("No folder open")) };
+        match self.project_files_ok(&root, dap::LAUNCH_PATH, tinta_core::keymap::Command::DebugSelectConfig) {
+            Ok(true) => {}
+            Ok(false) => return self.toast(tr("This folder isn't trusted: its launch.json is ignored")),
+            Err(t) => return t,
+        }
         let configs = match dap::load_configs(&root) {
             Ok(c) => c,
             Err(e) => return self.debug_problem(e),

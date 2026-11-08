@@ -26,11 +26,14 @@ fn task(name: &str, command: &str, group: &str) -> Task {
     Task { name: name.into(), command: command.into(), cwd: None, group: group.into() }
 }
 
-/// The project's own `.tinta/tasks.json` first, then what its files suggest.
-pub fn detect(root: &Path) -> (Vec<Task>, Option<String>) {
+pub const TASKS_PATH: &str = ".tinta/tasks.json";
+
+/// The project's own `.tinta/tasks.json` first, unless the folder isn't trusted with it, then
+/// what its files suggest.
+pub fn detect(root: &Path, use_project_file: bool) -> (Vec<Task>, Option<String>) {
     let mut out = Vec::new();
     let mut problem = None;
-    if let Ok(src) = std::fs::read_to_string(root.join(".tinta/tasks.json")) {
+    if use_project_file && let Ok(src) = std::fs::read_to_string(root.join(TASKS_PATH)) {
         match serde_json::from_str::<Vec<Task>>(&crate::settings::strip_jsonc(&src)) {
             Ok(list) => out.extend(list.into_iter().filter(|t| !t.command.is_empty())),
             Err(e) => problem = Some(format!(".tinta/tasks.json: {e}")),
@@ -312,7 +315,7 @@ mod tests {
         std::fs::write(d.join("Cargo.toml"), "").unwrap();
         std::fs::write(d.join("Makefile"), "VAR := 1\nall: x\n\tcc\nclean:\n\trm\n.PHONY: all\n").unwrap();
         std::fs::write(d.join("package.json"), r#"{"scripts":{"build":"x","lint":"y"}}"#).unwrap();
-        let (t, err) = detect(&d);
+        let (t, err) = detect(&d, true);
         assert!(err.is_none());
         let names: Vec<_> = t.iter().map(|x| x.name.as_str()).collect();
         for want in ["cargo build", "cargo test", "make", "make all", "make clean", "npm run build", "npm run lint"] {
@@ -330,11 +333,14 @@ mod tests {
         std::fs::write(d.join(".tinta/tasks.json"), r#"[ // mine
             { "name": "release", "command": "cargo build --release", "group": "build" },
         ]"#).unwrap();
-        let (t, err) = detect(&d);
+        let (t, err) = detect(&d, true);
         assert!(err.is_none(), "{err:?}");
         assert_eq!(default_build(&t).unwrap().name, "release");
+        // A folder not trusted with its own file gets only what its files suggest.
+        let (t, _) = detect(&d, false);
+        assert_eq!(default_build(&t).unwrap().name, "cargo build");
         std::fs::write(d.join(".tinta/tasks.json"), "{ nope").unwrap();
-        assert!(detect(&d).1.is_some());
+        assert!(detect(&d, true).1.is_some());
     }
 
     #[test]

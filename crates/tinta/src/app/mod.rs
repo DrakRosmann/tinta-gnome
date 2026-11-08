@@ -11,6 +11,7 @@ mod keys;
 mod lists;
 mod lsp;
 mod palette;
+mod run;
 mod script;
 mod search;
 mod tasks;
@@ -24,6 +25,7 @@ pub use editing::{FIND_INPUT, MAX_SHOWN_MATCHES, REPLACE_INPUT};
 pub use explorer::ExplorerMsg;
 pub use palette::{PAction, PItem, PaletteMode, PaletteMsg, PaletteState, PALETTE_INPUT};
 pub use debug::{DEBUG_INPUT, DebugMsg, DebugPanel, WATCH_INPUT};
+pub use run::{RunPanel, out_dir as run_out_dir};
 pub use tasks::{TaskMsg, TaskPanel};
 pub use vim::{VIM_LINE, VimMsg};
 pub use search::{SearchMsg, SearchPanel, SearchRow, SEARCH_INPUT};
@@ -121,6 +123,10 @@ pub enum DialogState {
     /// A new value for a variable, or a watched expression, of the paused program.
     SetValue(tinta_core::dap::VarRow),
     ConfirmDiscard(tinta_core::git::StatusEntry),
+    /// Arguments for running a file.
+    RunArgs(PathBuf),
+    /// May this folder's `.tinta/` file run commands? Then what was asked for, again.
+    TrustFolder(PathBuf, &'static str, Command),
     About,
     Shortcuts,
 }
@@ -251,7 +257,8 @@ pub enum Message {
     SettingsClose,
     FsEvent(Vec<PathBuf>),
     TermTitle(u64, Option<String>),
-    TermExited(u64),
+    /// A terminal's program ended, with its wait status.
+    TermExited(u64, i32),
     TermFocus,
     TermSelect(usize),
     TermKill(usize),
@@ -281,6 +288,7 @@ pub struct App {
     pub git: GitPanel,
     pub tasks: TaskPanel,
     pub debug: DebugPanel,
+    pub runner: RunPanel,
     pub system_mono: Option<String>,
     pub vim: tinta_core::vim::Vim,
     pub vim_line: Option<(char, String)>,
@@ -380,6 +388,7 @@ impl App {
             git: GitPanel::default(),
             tasks: TaskPanel::default(),
             debug: DebugPanel::default(),
+            runner: RunPanel::default(),
             system_mono: flags.system_mono.clone(),
             vim: tinta_core::vim::Vim::new(),
             vim_line: None,
@@ -668,6 +677,13 @@ impl App {
             }
             Message::OpenFolderPath(p) => self.open_folder(p),
             Message::LspHintDone(lang) => {
+                if let Some(l) = lang.strip_prefix("run:") {
+                    let l = l.to_string();
+                    return match self.run_hint_done(&l) {
+                        Some(c) => Task::batch([fx::clipboard_write(c), self.toast(crate::i18n::tr("Command copied: run it in a terminal"))]),
+                        None => Task::none(),
+                    };
+                }
                 let command = self.lsp_missing.get(&lang).and_then(|(_, h)| h.command.clone());
                 self.lsp_hint_closed.insert(lang);
                 if let Some(c) = command {
@@ -750,7 +766,11 @@ impl App {
                 }
                 Task::none()
             }
-            Message::TermExited(id) => {
+            Message::TermExited(id, status) => {
+                // The run's terminal stays, with what the program printed.
+                if self.run_term_exited(id, status) {
+                    return Task::none();
+                }
                 if let Some(i) = self.terms.iter().position(|s| s.id == id) {
                     self.terms.remove(i);
                     self.active_term = self.active_term.min(self.terms.len().saturating_sub(1));
@@ -773,6 +793,7 @@ impl App {
             Message::TermKill(i) => {
                 if i < self.terms.len() {
                     let t = self.terms.remove(i);
+                    self.run_term_closed(t.id);
                     if self.debug.tty.as_ref().is_some_and(|(id, _)| *id == t.id) {
                         self.debug.tty = None;
                     }

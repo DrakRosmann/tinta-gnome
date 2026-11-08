@@ -166,6 +166,15 @@ commands! {
     FocusNextGroup, "view.nextGroup", "Focus Next Editor Group", "Focar próximo grupo de editores", ["ctrl+k ctrl+right"];
     FocusPrevGroup, "view.prevGroup", "Focus Previous Editor Group", "Focar grupo de editores anterior", ["ctrl+k ctrl+left"];
     CloseGroup, "view.closeGroup", "Close Editor Group", "Fechar grupo de editores", [];
+    RunFile, "run.file", "Run File", "Executar arquivo", ["ctrl+f5", "ctrl+alt+n"];
+    RunWithArgs, "run.withArgs", "Run File with Arguments…", "Executar arquivo com argumentos…", [];
+    RunRerun, "run.rerun", "Run Last File Again", "Executar de novo o último arquivo", [];
+    RunStop, "run.stop", "Stop Running", "Parar a execução", ["ctrl+alt+m"];
+    RunSelection, "run.selection", "Run Selection or Line in REPL", "Executar seleção ou linha no REPL", ["shift+enter"];
+    RunOpenRepl, "run.repl", "Open REPL", "Abrir REPL", [];
+    RunConfigure, "run.configure", "Edit run.json", "Editar run.json", [];
+    TrustFolder, "workspace.trust", "Trust This Folder", "Confiar nesta pasta", [];
+    UntrustFolder, "workspace.untrust", "Stop Trusting This Folder", "Deixar de confiar nesta pasta", [];
     DebugStart, "debug.start", "Start or Continue Debugging", "Iniciar ou continuar a depuração", ["f5"];
     DebugStop, "debug.stop", "Stop Debugging", "Parar a depuração", ["shift+f5"];
     DebugRestart, "debug.restart", "Restart Debugging", "Reiniciar a depuração", ["ctrl+shift+f5"];

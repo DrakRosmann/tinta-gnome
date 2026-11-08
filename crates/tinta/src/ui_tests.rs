@@ -29,6 +29,9 @@ struct Ui {
     cursor: Point,
     mods: Modifiers,
     clipboard: Option<String>,
+    /// Programs started in terminals, and what was pasted or typed into them.
+    term_runs: Vec<(u64, std::path::PathBuf, Vec<String>)>,
+    term_sent: Vec<(u64, String)>,
     _guard: MutexGuard<'static, ()>,
 }
 
@@ -64,7 +67,17 @@ impl Ui {
         let _ = bus::drain();
         let flags = Flags { targets: targets.into_iter().map(|p| (p, None)).collect(), new_session: true, dark: true, system_mono: None, font_names: Vec::new() };
         let (app, first) = App::new(flags);
-        let mut ui = Ui { app, state: Default::default(), diff_state: Default::default(), cursor: Point::ORIGIN, mods: Modifiers::empty(), clipboard: None, _guard: guard };
+        let mut ui = Ui {
+            app,
+            state: Default::default(),
+            diff_state: Default::default(),
+            cursor: Point::ORIGIN,
+            mods: Modifiers::empty(),
+            clipboard: None,
+            term_runs: Vec::new(),
+            term_sent: Vec::new(),
+            _guard: guard,
+        };
         ui.run(first);
         ui.frame();
         ui.frame();
@@ -79,6 +92,8 @@ impl Ui {
                 Effect::Message(m) => queue.push(m),
                 Effect::ClipboardWrite(t) => self.clipboard = Some(t),
                 Effect::ClipboardRead(then) => queue.push(then(self.clipboard.clone())),
+                Effect::TermRun { id, cwd, argv } => self.term_runs.push((id, cwd, argv)),
+                Effect::TermInput { id, text } | Effect::TermFeed { id, text } => self.term_sent.push((id, text)),
                 _ => {}
             }
         }
@@ -1433,6 +1448,9 @@ fn a_launch_json_pointing_at_nothing_says_so() {
     std::fs::write(&src, "int main(void) { return 0; }\n").unwrap();
     let mut ui = Ui::new(vec![dir.clone(), src]);
     ui.key("f5", Modifiers::empty(), None);
+    // The folder's own launch.json runs commands: asked about first.
+    assert!(matches!(ui.app.dialog, Some(crate::app::DialogState::TrustFolder(..))), "{:?}", ui.app.dialog);
+    ui.msg(Message::Dialog(crate::app::DialogMsg::Primary));
     assert!(ui.app.debug.session.is_none(), "it doesn't sit there looking like it's running");
     assert_eq!(ui.app.panel, Some(crate::app::PanelView::Debug));
     assert!(ui.app.debug.console.iter().any(|l| l.text.contains("nao_existe")), "{:?}", ui.app.debug.console);
@@ -1557,4 +1575,232 @@ fn tabs_move_between_splits_and_an_emptied_split_goes_away() {
     }
     assert_eq!(ui.app.groups.len(), 1);
     assert_eq!(ui.app.groups[0].tabs().len(), ui.app.tabs.len());
+}
+
+// Running files ---------------------------------------------------------------------------
+
+fn have(tool: &str) -> bool {
+    tinta_core::host::find(tool)
+}
+
+/// What the run's terminal would show: its command run here, without a terminal.
+fn run_output(cwd: &Path, argv: &[String]) -> (String, i32) {
+    let out = std::process::Command::new(&argv[0]).args(&argv[1..]).current_dir(cwd).stdin(std::process::Stdio::null()).output().unwrap();
+    (String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr), out.status.code().unwrap_or(-1))
+}
+
+fn last_run(ui: &Ui) -> (u64, PathBuf, Vec<String>) {
+    ui.term_runs.last().cloned().expect("a program was started in a terminal")
+}
+
+#[test]
+fn a_script_runs_in_its_own_terminal_and_stays_there_with_its_output() {
+    let dir = temp_dir("runsh");
+    let p = dir.join("oi.sh");
+    std::fs::write(&p, "echo \"oi $1\"\nexit 3\n").unwrap();
+    let mut ui = Ui::new(vec![p.clone()]);
+    ui.key("f5", Modifiers::CTRL, None);
+    let (id, cwd, argv) = last_run(&ui);
+    assert_eq!(cwd, dir);
+    assert_eq!(ui.app.runner.term, Some(id));
+    assert_eq!(ui.app.panel, Some(crate::app::PanelView::Terminal));
+    assert_eq!(ui.app.focus, Focus::Editor, "the text keeps the keyboard");
+    let t = ui.app.terms.iter().find(|t| t.id == id).unwrap();
+    assert_eq!(t.title, "▶ oi.sh");
+    assert!(argv[4].starts_with("bash ") && argv[4].ends_with("oi.sh"), "{argv:?}");
+    let (out, code) = run_output(&cwd, &argv);
+    assert_eq!(code, 3);
+    assert!(out.contains("oi \n") && out.contains(" 3 · "), "{out}");
+    // It ends, and the terminal stays with what it printed.
+    ui.msg(Message::TermExited(id, 3 << 8));
+    let t = ui.app.terms.iter().find(|t| t.id == id).expect("still there");
+    assert_eq!(t.title, "✗ oi.sh (3)");
+    assert!(!ui.app.runner.running);
+    // Running again takes its place.
+    ui.cmd(Command::RunRerun);
+    let (id2, _, _) = last_run(&ui);
+    assert_ne!(id, id2);
+    assert!(!ui.app.terms.iter().any(|t| t.id == id));
+    assert_eq!(ui.app.terms.iter().filter(|t| t.title.ends_with("oi.sh")).count(), 1);
+    // Ctrl+Alt+M stops it as Ctrl+C would.
+    ui.cmd(Command::RunStop);
+    assert_eq!(ui.term_sent.last(), Some(&(id2, "\u{3}".to_string())));
+    ui.msg(Message::TermExited(id2, 0));
+    assert_eq!(ui.app.terms.iter().find(|t| t.id == id2).unwrap().title, "✓ oi.sh");
+    // Closed by hand, it's forgotten.
+    let i = ui.app.terms.iter().position(|t| t.id == id2).unwrap();
+    ui.msg(Message::TermKill(i));
+    assert_eq!(ui.app.runner.term, None);
+}
+
+#[test]
+fn arguments_are_asked_for_once_and_kept_for_the_file() {
+    let dir = temp_dir("runargs");
+    let p = dir.join("args.sh");
+    std::fs::write(&p, "printf '%s|' \"$@\"\n").unwrap();
+    let mut ui = Ui::new(vec![p.clone()]);
+    ui.cmd(Command::RunWithArgs);
+    assert!(matches!(ui.app.dialog, Some(crate::app::DialogState::RunArgs(_))));
+    ui.msg(Message::Dialog(crate::app::DialogMsg::Input("um 'dois tres'".into())));
+    ui.msg(Message::Dialog(crate::app::DialogMsg::Primary));
+    let (_, cwd, argv) = last_run(&ui);
+    let (out, _) = run_output(&cwd, &argv);
+    assert!(out.contains("um|dois tres|"), "{out}");
+    // Ctrl+F5 uses them again, and the dialog starts with them.
+    ui.cmd(Command::RunFile);
+    assert!(last_run(&ui).2[4].ends_with("um 'dois tres'"));
+    ui.cmd(Command::RunWithArgs);
+    assert_eq!(ui.app.dialog_input, "um 'dois tres'");
+    ui.msg(Message::Dialog(crate::app::DialogMsg::Cancel));
+    assert_eq!(ui.app.build_session().run_args.get(&p).map(String::as_str), Some("um 'dois tres'"));
+}
+
+#[test]
+fn a_compiled_file_builds_first_and_its_errors_mark_the_code() {
+    if !have("cc") {
+        return;
+    }
+    let dir = temp_dir("runc");
+    let p = dir.join("ola.c");
+    std::fs::write(&p, "#include <stdio.h>\nint main(void) {\n  printf(\"ola\\n\");\n  return nada;\n}\n").unwrap();
+    let mut ui = Ui::new(vec![p.clone()]);
+    ui.app.settings.lsp_enabled = false;
+    ui.cmd(Command::RunFile);
+    assert_eq!(ui.app.panel, Some(crate::app::PanelView::Tasks));
+    wait_long(&mut ui, |a| a.tasks.running.is_none() && a.tasks.exit.is_some());
+    assert!(ui.term_runs.is_empty(), "a failed build runs nothing");
+    let (_, e) = ui.app.active().unwrap();
+    assert!(e.diags.iter().any(|d| d.message.contains("nada")), "{:?}", e.diags);
+    // Fixed, it builds and runs.
+    std::fs::write(&p, "#include <stdio.h>\nint main(void) {\n  printf(\"ola\\n\");\n  return 0;\n}\n").unwrap();
+    ui.cmd(Command::RunFile);
+    wait_long(&mut ui, |a| a.runner.term.is_some());
+    let (_, cwd, argv) = last_run(&ui);
+    let (out, code) = run_output(&cwd, &argv);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("ola"), "{out}");
+    assert_eq!(ui.app.panel, Some(crate::app::PanelView::Terminal));
+}
+
+#[test]
+fn a_projects_run_json_needs_the_folder_trusted() {
+    let dir = temp_dir("runtrust");
+    std::fs::create_dir_all(dir.join(".tinta")).unwrap();
+    std::fs::write(dir.join(".tinta/run.json"), r#"{ ".sh": "echo do-projeto" }"#).unwrap();
+    let p = dir.join("a.sh");
+    std::fs::write(&p, "echo do-arquivo\n").unwrap();
+    let mut ui = Ui::new(vec![dir.clone(), p.clone()]);
+    ui.cmd(Command::RunFile);
+    assert!(matches!(ui.app.dialog, Some(crate::app::DialogState::TrustFolder(..))), "{:?}", ui.app.dialog);
+    assert!(ui.term_runs.is_empty(), "nothing runs before the answer");
+    // Not trusted: the project's file is left out, this session.
+    ui.msg(Message::Dialog(crate::app::DialogMsg::Secondary));
+    assert!(last_run(&ui).2[4].starts_with("bash "), "{:?}", last_run(&ui).2);
+    ui.cmd(Command::RunFile);
+    assert!(ui.app.dialog.is_none(), "asked once");
+    // Trusted, it counts, and that's remembered.
+    ui.cmd(Command::TrustFolder);
+    ui.cmd(Command::RunFile);
+    assert_eq!(last_run(&ui).2[4], "echo do-projeto");
+    assert!(tinta_core::run::trust::is_trusted(&dir));
+    ui.cmd(Command::UntrustFolder);
+    ui.cmd(Command::RunFile);
+    assert!(last_run(&ui).2[4].starts_with("bash "));
+    assert!(!tinta_core::run::trust::is_trusted(&dir));
+}
+
+#[test]
+fn shift_enter_sends_the_line_to_the_repl_and_goes_on_to_the_next() {
+    if !have("python3") && !have("ipython") {
+        return;
+    }
+    let dir = temp_dir("repl");
+    let p = dir.join("r.py");
+    std::fs::write(&p, "x = 1\nfor i in range(2):\n    print(i + x)\n").unwrap();
+    let mut ui = Ui::new(vec![p.clone()]);
+    ui.app.settings.lsp_enabled = false;
+    ui.key("enter", Modifiers::SHIFT, None);
+    let (id, _, argv) = last_run(&ui);
+    assert!(argv[2].starts_with("exec ") && argv[2].contains("python"), "{argv:?}");
+    assert_eq!(ui.term_sent, vec![(id, "x = 1".to_string()), (id, "\r".to_string())]);
+    assert_eq!(ui.head(), (1, 0));
+    assert!(ui.app.terms.iter().any(|t| t.id == id && t.title == "REPL: Python"));
+    assert_eq!(ui.text(), "x = 1\nfor i in range(2):\n    print(i + x)\n", "nothing typed into the text");
+    // A selection goes whole, and the same REPL takes it.
+    ui.app.jump_to(1, 0);
+    {
+        let (t, e) = ui.app.active_mut().unwrap();
+        let end = e.doc.line_end(2);
+        t.cursors.set_single(tinta_core::Selection::new(e.doc.line_start(1), end));
+    }
+    ui.term_sent.clear();
+    ui.key("enter", Modifiers::SHIFT, None);
+    assert_eq!(ui.term_runs.len(), 1, "no second REPL");
+    assert_eq!(ui.term_sent, vec![(id, "for i in range(2):\n    print(i + x)".to_string()), (id, "\r\r".to_string())]);
+    // The REPL ending, it's started again next time.
+    ui.msg(Message::TermExited(id, 0));
+    ui.key("enter", Modifiers::SHIFT, None);
+    assert_eq!(ui.term_runs.len(), 2);
+}
+
+#[test]
+fn shift_enter_is_still_a_newline_where_there_is_no_repl() {
+    let dir = temp_dir("norepl");
+    let p = dir.join("n.md");
+    std::fs::write(&p, "um\n").unwrap();
+    let mut ui = Ui::new(vec![p]);
+    ui.app.jump_to(0, 2);
+    ui.set_mods(Modifiers::SHIFT);
+    ui.key("enter", Modifiers::SHIFT, None);
+    assert_eq!(ui.text(), "um\n\n");
+    assert!(ui.term_runs.is_empty());
+}
+
+#[test]
+fn untitled_text_runs_from_a_file_written_aside() {
+    let mut ui = Ui::new(vec![]);
+    ui.cmd(Command::NewFile);
+    if let Some((_, e)) = ui.app.active_mut() {
+        e.doc.language = tinta_core::language::by_name("Bourne Again Shell (bash)");
+    }
+    ui.typed("echo rascunho");
+    ui.cmd(Command::RunFile);
+    let (_, cwd, argv) = last_run(&ui);
+    let file = argv[4].strip_prefix("bash ").unwrap();
+    assert!(file.ends_with("untitled.sh"), "{file}");
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "echo rascunho");
+    let (out, code) = run_output(&cwd, &argv);
+    assert_eq!(code, 0);
+    assert!(out.contains("rascunho"), "{out}");
+}
+
+#[test]
+fn a_missing_program_says_what_to_install() {
+    if have("cobc") {
+        return;
+    }
+    let dir = temp_dir("runmissing");
+    let p = dir.join("hello.cob");
+    std::fs::write(&p, "       IDENTIFICATION DIVISION.\n").unwrap();
+    let mut ui = Ui::new(vec![p]);
+    ui.app.settings.lsp_enabled = false;
+    ui.cmd(Command::RunFile);
+    assert!(ui.term_runs.is_empty());
+    let (key, text, _) = ui.app.banner_hint().expect("a banner");
+    assert!(key.starts_with("run:"), "{key}");
+    assert!(text.contains("cobc") && text.contains(".cob"), "{text}");
+    ui.msg(Message::LspHintDone(key));
+    assert!(ui.app.banner_hint().is_none_or(|(k, _, _)| !k.starts_with("run:")));
+}
+
+#[test]
+fn markdown_runs_as_its_preview() {
+    let dir = temp_dir("runmd");
+    let p = dir.join("leia.md");
+    std::fs::write(&p, "# Oi\n").unwrap();
+    let mut ui = Ui::new(vec![p]);
+    let before = ui.app.tabs.len();
+    ui.cmd(Command::RunFile);
+    assert!(ui.app.tabs.len() > before, "the preview opened");
+    assert!(ui.term_runs.is_empty());
 }

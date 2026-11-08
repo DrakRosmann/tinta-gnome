@@ -155,6 +155,56 @@ também o formato do VS Code. O comando "Editar launch.json" cria um modelo:
 - Os erros aparecem no código e no painel de problemas, e `F6` e `Shift+F6` pulam de um para o outro
 - No terminal, `Ctrl+clique` abre `arquivo:linha` e links
 
+**Executar arquivos**
+
+`Ctrl+F5` (ou `Ctrl+Alt+N`, ou o botão ▶ no cabeçalho) roda o arquivo aberto, sem depurador, em
+cerca de 70 linguagens: Python, JavaScript, TypeScript, Ruby, Perl, PHP, Lua, R, Julia, Bash, Fish,
+PowerShell, Elixir, Erlang, Haskell, OCaml, F#, C#, Java, Kotlin, Scala, Groovy, Clojure, Swift,
+Dart, Go, Rust, C, C++, Zig, Nim, Crystal, Odin, D, Fortran, Pascal, Ada, COBOL, Assembly, Verilog,
+Prolog, Racket, Scheme, Common Lisp, SQL, LaTeX, Typst e outras.
+
+- O programa roda numa aba própria do terminal, então o `input()` e o `scanf` funcionam. No fim
+  aparece o código de saída e quanto tempo levou, e a aba fica lá com a saída até a próxima vez
+- Linguagens compiladas compilam primeiro, pelo painel de tarefas: um erro de compilação aparece no
+  código, e o programa só roda se compilar
+- O comando vem do projeto quando ele diz mais que o arquivo: `cargo run` com o alvo certo
+  (`--bin`, `--example`, `--test`), `go build` no módulo, o Python do `.venv`, `uv run`,
+  `poetry run`, Deno ou Bun, e `make` ou `cmake`. Depois do projeto vale o shebang (`#!`)
+- Cada linguagem tem uma lista de programas, e vale o primeiro instalado (`tsx`, `bun`, `deno`,
+  `node` para TypeScript, por exemplo). Sem nenhum, um aviso diz qual instalar e copia o comando da
+  sua distribuição
+- HTML abre no navegador, Markdown abre a pré-visualização
+- Texto sem título também roda: é salvo numa pasta temporária com a extensão da linguagem
+- "Executar arquivo com argumentos…" pede os argumentos, que ficam guardados para aquele arquivo e
+  aceitam o que o terminal aceita (`--n 3 < entrada.txt`). "Executar de novo o último arquivo"
+  repete; `Ctrl+Alt+M` para, como um `Ctrl+C`
+- `Shift+Enter` manda a seleção, ou a linha atual, ao REPL da linguagem (Python, Node, Ruby, R,
+  Julia, GHCi, OCaml, IEx, Clojure, Lua, SQLite, jshell e outros) e passa para a próxima linha. Em
+  linguagens sem REPL, `Shift+Enter` continua sendo uma quebra de linha
+
+Para mudar o comando de uma linguagem, use `runCommands` nas configurações ou `.tinta/run.json` no
+projeto ("Editar run.json" cria um modelo). A chave é o nome da linguagem ou a extensão:
+
+```jsonc
+{
+  "Python": "python3 -X dev ${file}",
+  ".c": { "build": "cc -O2 -Wall -o ${out} ${file} -lm", "run": "${out}" },
+  "Rust": { "run": "cargo run -q --release -- ${args}", "cwd": "${workspaceFolder}" }
+}
+```
+
+As variáveis já vêm entre aspas: `${file}`, `${fileDirname}`, `${fileBasename}`,
+`${fileBasenameNoExtension}`, `${workspaceFolder}`, `${out}` e `${outDir}`. Os argumentos vão no
+fim, ou onde estiver `${args}`.
+
+**Pastas confiáveis**
+
+Os arquivos `.tinta/run.json`, `.tinta/tasks.json` e `.tinta/launch.json` de um projeto rodam
+comandos no seu computador. Por isso, na primeira vez que um deles seria usado, o Tinta pergunta se
+você confia na pasta. Confiando, a resposta fica guardada; sem confiar, os arquivos `.tinta` dela são
+ignorados até fechar o editor, e o resto (o build detectado, o depurador sem configuração) continua
+funcionando. "Confiar nesta pasta" e "Deixar de confiar nesta pasta" mudam a resposta depois.
+
 **Git**
 
 - Marcas na margem e no mapa da barra de rolagem, próxima alteração, reverter um trecho
@@ -226,6 +276,10 @@ arquivo é relido ao salvar, sem reiniciar, e aceita comentários e vírgulas so
   // Outro servidor para uma linguagem; "command" vazio desliga.
   "lspServers": {
     "python": { "command": "ruff", "args": ["server"] }
+  },
+  // Como o Ctrl+F5 roda uma linguagem, antes da tabela embutida.
+  "runCommands": {
+    "Python": "python3 -X dev ${file}"
   }
 }
 ```
@@ -277,6 +331,9 @@ A lista completa de atalhos está em `Ctrl+K Ctrl+S`, e os identificadores dos c
 | `Alt+Z` | Quebra de linha |
 | `Ctrl+Shift+V` | Pré-visualizar Markdown |
 | `Ctrl+Shift+B` | Rodar o build |
+| `Ctrl+F5` / `Ctrl+Alt+N` | Executar o arquivo |
+| `Ctrl+Alt+M` | Parar a execução |
+| `Shift+Enter` | Mandar a seleção ou a linha ao REPL |
 | `F5` / `Shift+F5` | Iniciar ou continuar / parar a depuração |
 | `F9` / `Shift+F9` | Breakpoint / breakpoint condicional |
 | `F10` / `F11` / `Shift+F11` | Próxima linha / entrar na função / sair dela |

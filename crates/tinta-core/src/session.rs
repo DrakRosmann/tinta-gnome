@@ -43,6 +43,9 @@ pub struct Session {
     pub breakpoints: crate::dap::Breakpoints,
     #[serde(default)]
     pub watches: Vec<String>,
+    /// What "Run File with Arguments…" was last given, for each file.
+    #[serde(default)]
+    pub run_args: std::collections::HashMap<PathBuf, String>,
 }
 
 fn session_path() -> PathBuf {

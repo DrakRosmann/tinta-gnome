@@ -19,6 +19,8 @@ pub struct Panel {
     term_stack: gtk::Stack,
     term_tabs: gtk::Box,
     terms: RefCell<HashMap<u64, vte::Terminal>>,
+    /// What was sent to a terminal whose program hasn't started yet.
+    pending: Rc<RefCell<HashMap<u64, Vec<Queued>>>>,
     tasks: gtk::TextView,
     output: gtk::TextView,
     problems: gtk::ListBox,
@@ -26,6 +28,36 @@ pub struct Panel {
     last: RefCell<Synced>,
     syncing: Cell<bool>,
     dark: Cell<Option<bool>>,
+}
+
+/// Text for a terminal: pasted (true) or typed as it is.
+type Queued = (bool, String);
+
+/// What waited for the terminal's program, a piece at a time: a REPL handed lines and Enter all
+/// at once would take them for a paste. Anything sent meanwhile queues behind.
+fn send_queued(pending: Rc<RefCell<HashMap<u64, Vec<Queued>>>>, id: u64, weak: glib::WeakRef<vte::Terminal>) {
+    glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+        let next = {
+            let mut p = pending.borrow_mut();
+            match p.get_mut(&id) {
+                Some(q) if !q.is_empty() => Some(q.remove(0)),
+                _ => {
+                    p.remove(&id);
+                    None
+                }
+            }
+        };
+        let (Some((paste, text)), Some(t)) = (next, weak.upgrade()) else {
+            pending.borrow_mut().remove(&id);
+            return glib::ControlFlow::Break;
+        };
+        if paste {
+            t.paste_text(&text);
+        } else {
+            t.feed_child(text.as_bytes());
+        }
+        glib::ControlFlow::Continue
+    });
 }
 
 #[derive(Default, PartialEq)]
@@ -143,6 +175,7 @@ impl Panel {
             stack,
             term_stack,
             term_tabs,
+            pending: Rc::default(),
             terms: RefCell::new(HashMap::new()),
             tasks,
             output,
@@ -201,15 +234,24 @@ impl Panel {
     }
 
     pub fn spawn_terminal(&self, shell: &Rc<Shell>, id: u64, cwd: &Path) {
-        let term = self.terminal_widget(shell, id);
         let shell_cmd = {
             let configured = shell.app.borrow().settings.terminal_shell.clone();
             if configured.trim().is_empty() { std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()) } else { configured }
         };
+        self.spawn_argv(shell, id, cwd, vec![shell_cmd]);
+    }
+
+    /// A terminal running `argv`: the shell, or a program run from the editor.
+    pub fn spawn_argv(&self, shell: &Rc<Shell>, id: u64, cwd: &Path, argv: Vec<String>) {
+        let term = self.terminal_widget(shell, id);
         let env = ["TERM_PROGRAM=tinta", "COLORTERM=truecolor"];
-        // In a Flatpak the shell is the user's, outside the sandbox; VTE's TERM has to be passed on.
-        let argv = tinta_core::host::argv(&[shell_cmd], Some(cwd), &[("TERM", "xterm-256color"), ("TERM_PROGRAM", "tinta"), ("COLORTERM", "truecolor")]);
+        // In a Flatpak the program is the user's, outside the sandbox; VTE's TERM has to be passed on.
+        let argv = tinta_core::host::argv(&argv, Some(cwd), &[("TERM", "xterm-256color"), ("TERM_PROGRAM", "tinta"), ("COLORTERM", "truecolor")]);
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        // Input sent before the program is there waits for it to show something, a REPL its
+        // prompt, so it reads the lines one by one rather than as a paste.
+        self.pending.borrow_mut().insert(id, Vec::new());
+        let (pending, weak) = (self.pending.clone(), term.downgrade());
         term.spawn_async(
             vte::PtyFlags::DEFAULT,
             cwd.to_str(),
@@ -219,10 +261,22 @@ impl Panel {
             || {},
             -1,
             gio::Cancellable::NONE,
-            |r| {
+            move |r| {
                 if let Err(e) = r {
                     log::warn!("terminal: {e}");
+                    pending.borrow_mut().remove(&id);
+                    return;
                 }
+                let mut waited = 0;
+                glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+                    waited += 50;
+                    let Some(t) = weak.upgrade() else { return glib::ControlFlow::Break };
+                    if t.cursor_position() == (0, 0) && waited < 5000 {
+                        return glib::ControlFlow::Continue;
+                    }
+                    send_queued(pending.clone(), id, weak.clone());
+                    glib::ControlFlow::Break
+                });
             },
         );
         self.add_terminal(id, term);
@@ -271,9 +325,9 @@ impl Panel {
         });
         term.add_controller(click);
         let s = Rc::downgrade(shell);
-        term.connect_child_exited(move |_, _| {
+        term.connect_child_exited(move |_, status| {
             if let Some(s) = s.upgrade() {
-                s.dispatch(Message::TermExited(id));
+                s.dispatch(Message::TermExited(id, status));
             }
         });
         let s = Rc::downgrade(shell);
@@ -294,9 +348,27 @@ impl Panel {
     }
 
     pub fn paste_text(&self, id: u64, text: &str) {
+        if let Some(q) = self.pending.borrow_mut().get_mut(&id) {
+            q.push((true, text.to_string()));
+            return;
+        }
         if let Some(t) = self.terms.borrow().get(&id) {
             t.paste_text(text);
         }
+    }
+
+    /// Typed into the terminal as it is, a beat after what came before: Enter right behind a
+    /// paste would be taken as part of it.
+    pub fn feed(&self, id: u64, text: &str) {
+        let mut pending = self.pending.borrow_mut();
+        if let Some(q) = pending.get_mut(&id) {
+            q.push((false, text.to_string()));
+            return;
+        }
+        let Some(t) = self.terms.borrow().get(&id).cloned() else { return };
+        pending.insert(id, vec![(false, text.to_string())]);
+        drop(pending);
+        send_queued(self.pending.clone(), id, t.downgrade());
     }
 
     pub fn copy(&self, id: u64) {
@@ -312,6 +384,7 @@ impl Panel {
     }
 
     pub fn kill(&self, id: u64) {
+        self.pending.borrow_mut().remove(&id);
         if let Some(t) = self.terms.borrow_mut().remove(&id) {
             self.term_stack.remove(&t);
         }

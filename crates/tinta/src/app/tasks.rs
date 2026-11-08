@@ -87,7 +87,11 @@ impl App {
 
     pub fn run_task_picker(&mut self) -> AppTask {
         let Some(root) = self.task_root() else { return self.toast(tr("No folder open")) };
-        let (list, problem) = tasks::detect(&root);
+        let own = match self.project_files_ok(&root, tasks::TASKS_PATH, tinta_core::keymap::Command::RunTask) {
+            Ok(b) => b,
+            Err(t) => return t,
+        };
+        let (list, problem) = tasks::detect(&root, own);
         if let Some(p) = problem {
             self.output.push(p);
         }
@@ -109,7 +113,11 @@ impl App {
 
     pub fn run_default_build(&mut self) -> AppTask {
         let Some(root) = self.task_root() else { return self.toast(tr("No folder open")) };
-        let (list, _) = tasks::detect(&root);
+        let own = match self.project_files_ok(&root, tasks::TASKS_PATH, tinta_core::keymap::Command::RunBuild) {
+            Ok(b) => b,
+            Err(t) => return t,
+        };
+        let (list, _) = tasks::detect(&root, own);
         match tasks::default_build(&list).cloned() {
             Some(t) => self.run_task(t),
             None => self.toast(tr("No tasks found in this folder")),
@@ -132,7 +140,8 @@ impl App {
 
     pub fn run_task(&mut self, task: Task) -> AppTask {
         self.stop_task();
-        let Some(root) = self.task_root() else { return AppTask::none() };
+        // A file with no folder, like untitled text being run, builds where the task says.
+        let Some(root) = self.task_root().or_else(|| task.cwd.as_ref().map(PathBuf::from)) else { return AppTask::none() };
         let save = self.save_all_dirty_named();
         self.clear_task_problems();
         let cwd = task.cwd.as_ref().map(|c| root.join(c)).unwrap_or_else(|| root.clone());
@@ -261,6 +270,11 @@ impl App {
                 self.tasks.running = None;
                 self.tasks.exit = Some(if code == Some(0) { Ok(()) } else { Err(code) });
                 self.debug_build_finished(g, code == Some(0));
+                let run = self.run_build_finished(g, code == Some(0));
+                // Built to run: the program says the rest.
+                if !run.is_empty() {
+                    return run;
+                }
                 let name = self.tasks.last.as_ref().map(|t| t.name.clone()).unwrap_or_default();
                 let errors = self.tasks.problems.iter().filter(|(_, p)| p.severity == Severity::Error).count();
                 let warnings = self.tasks.problems.len() - errors;
