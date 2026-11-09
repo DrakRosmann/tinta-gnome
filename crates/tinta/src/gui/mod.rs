@@ -1,5 +1,6 @@
 //! The GTK side: the application, its window, and running what the app's logic asks for.
 
+mod activitybar;
 mod debug;
 mod dialogs;
 mod editor;

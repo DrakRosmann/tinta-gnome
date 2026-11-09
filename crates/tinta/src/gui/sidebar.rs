@@ -8,7 +8,6 @@ use crate::state::{DocEntry, Tab};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use tinta_core::git::StatusEntry;
 use tinta_core::keymap::Command;
@@ -17,7 +16,6 @@ pub struct Sidebar {
     pub root: gtk::Box,
     shell: Weak<Shell>,
     stack: gtk::Stack,
-    switch: HashMap<&'static str, gtk::ToggleButton>,
     explorer_title: gtk::Label,
     explorer: RowList,
     explorer_empty: adw::StatusPage,
@@ -219,34 +217,6 @@ impl Sidebar {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("tinta-sidebar");
         root.set_size_request(180, -1);
-        let switcher = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        switcher.set_halign(gtk::Align::Center);
-        switcher.set_margin_top(6);
-        switcher.set_margin_bottom(2);
-        let mut switch = HashMap::new();
-        for (name, icon, tip, view) in [
-            ("explorer", "folder-symbolic", "Explorer", SidebarView::Explorer),
-            ("search", "system-search-symbolic", "Search", SidebarView::Search),
-            ("git", "tinta-git-symbolic", "Source Control", SidebarView::Git),
-            ("outline", "view-list-bullet-symbolic", "Outline", SidebarView::Outline),
-            ("debug", "tinta-debug-symbolic", "Run and Debug", SidebarView::Debug),
-        ] {
-            let b = gtk::ToggleButton::new();
-            b.set_icon_name(icon);
-            b.add_css_class("flat");
-            b.set_tooltip_text(Some(tr(tip)));
-            let s = Rc::downgrade(shell);
-            b.connect_clicked(move |b| {
-                if let Some(s) = s.upgrade()
-                    && !b.has_css_class("syncing")
-                {
-                    s.dispatch(Message::SidebarShow(view));
-                }
-            });
-            switcher.append(&b);
-            switch.insert(name, b);
-        }
-        root.append(&switcher);
         let stack = gtk::Stack::new();
         stack.set_vexpand(true);
         stack.set_transition_type(gtk::StackTransitionType::Crossfade);
@@ -533,7 +503,6 @@ impl Sidebar {
             root,
             shell: Rc::downgrade(shell),
             stack,
-            switch,
             explorer_title,
             explorer,
             explorer_empty,
@@ -562,11 +531,6 @@ impl Sidebar {
         let mut last = self.last.borrow_mut();
         if last.view != Some(view) {
             self.stack.set_visible_child_name(view_name(view));
-            for (name, b) in &self.switch {
-                b.add_css_class("syncing");
-                b.set_active(*name == view_name(view));
-                b.remove_css_class("syncing");
-            }
             last.view = Some(view);
         }
         match view {

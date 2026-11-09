@@ -15,6 +15,9 @@ e a interface foi reescrita com os componentes do GNOME.
 - Janela, cabeçalho e menu principal do libadwaita; abas em `AdwTabView`, que dá para reordenar
   ou levar de uma divisão para outra arrastando; divisões lado a lado com largura ajustável, que a
   sessão guarda
+- Barra de ícones à esquerda (Explorador, Busca, Controle de versão, Estrutura, Depurar e
+  Configurações): fica mesmo com a barra lateral fechada; clicar no ícone da vista aberta recolhe
+  a barra lateral, que desliza. O ícone do controle de versão mostra quantos arquivos mudaram
 - Cabe numa janela estreita, até 360 px: a barra lateral passa a flutuar sobre o texto
   (`AdwOverlaySplitView`) e sai da frente quando um arquivo abre, as opções da busca vão para um
   menu e a barra de status fica com o essencial
