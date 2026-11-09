@@ -66,6 +66,7 @@ impl Dialogs {
                 return d.upcast();
             }
             DialogState::Shortcuts => return self.shortcuts(shell, app),
+            DialogState::HeaderBar => return super::headerbar::editor_dialog(shell, app),
             _ => {}
         }
         let (title, body, input, primary, destructive, extra): (String, String, Option<&str>, &str, bool, Option<&str>) = match state {
@@ -109,7 +110,7 @@ impl Dialogs {
                 };
                 (tr("Trust this folder?").into(), body, None, "Trust", false, Some("Don't Trust"))
             }
-            DialogState::About | DialogState::Shortcuts => unreachable!(),
+            DialogState::About | DialogState::Shortcuts | DialogState::HeaderBar => unreachable!(),
         };
         let d = adw::AlertDialog::new(Some(&title), (!body.is_empty()).then_some(body.as_str()));
         d.add_response("cancel", tr("Cancel"));

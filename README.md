@@ -24,6 +24,9 @@ e a interface foi reescrita com os componentes do GNOME.
 - Árvore de arquivos e resultados de busca em `GtkListView`: só as linhas visíveis existem
 - Segue o claro e o escuro do sistema, a **cor de destaque** e a fonte de largura fixa do GNOME, e
   muda junto quando elas mudam
+- Barra de cima editável: um clique com o botão direito nela, ou "Editar barra superior…" no menu,
+  escolhe quais comandos viram botões, de que lado e em que ordem. Cada botão mostra o atalho ao
+  passar o mouse
 - Uma janela só: `tinta-gnome arquivo` abre na janela que já está aberta (pelo `GtkApplication`)
 - Acentos com teclas mortas e métodos de entrada pelo GTK. Em ambientes sem método de entrada, o
   editor e os campos de texto compõem sozinhos, então `´` e `a` ainda dão `á`
@@ -57,7 +60,8 @@ para os aplicativos GTK.
 
 - Destaque de sintaxe para 220 gramáticas, incremental: digitar no meio de um arquivo de
   300 mil linhas reprocessa só o que mudou
-- 13 temas de cores para o código, além do padrão, que acompanha o claro e o escuro do sistema
+- 13 temas de cores para o código, além do padrão e do Adwaita (a paleta do GNOME), que
+  acompanham o claro e o escuro do sistema
 - Parênteses coloridos por profundidade, ignorando strings e comentários
 - Minimapa, guias de indentação, rolagem aderente, réguas, espaços visíveis
 - Dobra de código, quebra de linha, números de linha absolutos ou relativos, a partir da árvore de

@@ -242,6 +242,7 @@ impl Sidebar {
         explorer_page.append(&header(
             &explorer_title,
             &[
+                small(shell, "folder-open-symbolic", tr("Open Folder"), || Message::Cmd(Command::OpenFolder)),
                 small(shell, "document-new-symbolic", tr("New File"), || Message::Explorer(ExplorerMsg::NewFile(None))),
                 small(shell, "folder-new-symbolic", tr("New Folder"), || Message::Explorer(ExplorerMsg::NewFolder(None))),
                 small(shell, "view-refresh-symbolic", tr("Refresh"), || Message::Explorer(ExplorerMsg::Refresh)),

@@ -238,6 +238,7 @@ commands! {
     CopyRelativePath, "file.copyRelPath", "Copy Relative Path", "Copiar caminho relativo", [];
     // App
     OpenSettings, "app.settings", "Settings", "Configurações", ["ctrl+,"];
+    EditHeaderBar, "app.editHeaderBar", "Customize Header Bar…", "Editar barra superior…", [];
     OpenSettingsJson, "app.settingsJson", "Open Settings (JSON)", "Abrir configurações (JSON)", [];
     OpenKeybindings, "app.keybindings", "Open Keyboard Shortcuts (JSON)", "Abrir atalhos de teclado (JSON)", [];
     OpenSnippets, "app.snippets", "Open User Snippets (JSON)", "Abrir snippets do usuário (JSON)", [];

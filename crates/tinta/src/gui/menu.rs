@@ -101,7 +101,7 @@ pub fn main_menu(app: &App) -> gio::Menu {
     files.append_section(None, &section(km, &[C::Save, C::SaveAs, C::SaveAll, C::Revert, C::CompareSaved]));
     files.append_section(None, &section(km, &[C::CloseTab, C::CloseOtherTabs, C::CloseAllTabs, C::ReopenTab, C::PinTab, C::CloseFolder]));
     let config = section(km, &[C::OpenSettingsJson, C::OpenKeybindings, C::OpenSnippets]);
-    let s = section(km, &[C::OpenSettings]);
+    let s = section(km, &[C::OpenSettings, C::EditHeaderBar]);
     s.append_submenu(Some(tr("Configuration Files")), &config);
     files.append_section(None, &s);
     menu.append_submenu(Some(tr("File")), &files);
