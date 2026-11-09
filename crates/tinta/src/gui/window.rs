@@ -60,6 +60,7 @@ pub struct Window {
     groups: RefCell<Vec<Rc<GroupView>>>,
     pub panel: Rc<Panel>,
     pub sidebar: Rc<Sidebar>,
+    header_buttons: super::headerbar::HeaderButtons,
     status: super::status::StatusBar,
     popups: super::popups::Popups,
     dialogs: super::dialogs::Dialogs,
@@ -100,15 +101,12 @@ impl Window {
         let header = adw::HeaderBar::new();
         let title = adw::WindowTitle::new("Tinta", "");
         header.set_title_widget(Some(&title));
-        let sidebar_btn = icon_button("sidebar-show-symbolic", Command::ToggleSidebar, shell);
-        header.pack_start(&sidebar_btn);
-        header.pack_start(&icon_button("media-playback-start-symbolic", Command::RunFile, shell));
         let menu = gtk::MenuButton::builder().icon_name("open-menu-symbolic").primary(true).tooltip_text(tr("Main Menu")).build();
         menu.set_menu_model(Some(&super::menu::main_menu(&shell.app.borrow())));
-        header.pack_end(&menu);
-        header.pack_end(&icon_button("emblem-system-symbolic", Command::OpenSettings, shell));
-        header.pack_end(&icon_button("utilities-terminal-symbolic", Command::ToggleTerminal, shell));
-        header.pack_end(&icon_button("view-dual-symbolic", Command::SplitRight, shell));
+        header.pack_start(&menu);
+        // The rest of the buttons are the user's: they come with the first sync.
+        let header_buttons = super::headerbar::HeaderButtons::new(&header);
+        super::headerbar::connect_context_menu(&header);
         super::menu::install_actions(gapp, &window, shell);
 
         let groups_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -242,6 +240,7 @@ impl Window {
             groups: RefCell::new(Vec::new()),
             panel,
             sidebar,
+            header_buttons,
             status,
             popups: super::popups::Popups::default(),
             dialogs: super::dialogs::Dialogs::default(),
@@ -481,6 +480,7 @@ impl Window {
             });
             last.ui_theme = Some(app.settings.ui_theme);
         }
+        self.header_buttons.sync(shell, &app);
         if last.zen != Some(app.zen) {
             self.toolbar.set_reveal_top_bars(!app.zen);
             self.toolbar.set_reveal_bottom_bars(!app.zen);
@@ -712,18 +712,6 @@ fn tell(shell: &std::rc::Weak<Shell>, m: Message) {
             s.dispatch(m);
         }
     });
-}
-
-fn icon_button(icon: &str, cmd: Command, shell: &Rc<Shell>) -> gtk::Button {
-    let b = gtk::Button::from_icon_name(icon);
-    b.set_tooltip_text(Some(cmd.title(crate::i18n::is_portuguese())));
-    let s = Rc::downgrade(shell);
-    b.connect_clicked(move |_| {
-        if let Some(s) = s.upgrade() {
-            s.dispatch(Message::Cmd(cmd));
-        }
-    });
-    b
 }
 
 impl GroupView {

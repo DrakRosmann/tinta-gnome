@@ -111,6 +111,18 @@ pub struct Settings {
     pub terminal_font_size: f32,
     pub language: String,
     pub vim_mode: bool,
+    /// Buttons of the header bar, as command ids, left to right: beside the main menu and at the
+    /// window's controls.
+    pub header_start: Vec<String>,
+    pub header_end: Vec<String>,
+}
+
+pub fn default_header_start() -> Vec<String> {
+    vec!["view.sidebar".into()]
+}
+
+pub fn default_header_end() -> Vec<String> {
+    ["run.file", "view.split", "view.terminal", "app.settings"].map(String::from).to_vec()
 }
 
 impl Default for Settings {
@@ -160,6 +172,8 @@ impl Default for Settings {
             terminal_font_size: 13.0,
             language: String::new(),
             vim_mode: false,
+            header_start: default_header_start(),
+            header_end: default_header_end(),
         }
     }
 }

@@ -4,6 +4,7 @@ mod debug;
 mod dialogs;
 mod editor;
 mod findbar;
+mod headerbar;
 mod keys;
 mod markdown;
 mod menu;

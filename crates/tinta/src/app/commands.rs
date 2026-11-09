@@ -476,6 +476,7 @@ impl App {
                 self.dialog = Some(DialogState::Shortcuts);
             }
             C::About => self.dialog = Some(DialogState::About),
+            C::EditHeaderBar => self.dialog = Some(DialogState::HeaderBar),
         }
         Task::none()
     }
@@ -788,6 +789,10 @@ impl App {
             SettingMsg::Whitespace(v) => self.settings.render_whitespace = v,
             SettingMsg::CursorStyle(v) => self.settings.cursor_style = v,
             SettingMsg::AutoSave(v) => self.settings.auto_save = v,
+            SettingMsg::HeaderBar(start, end) => {
+                self.settings.header_start = start;
+                self.settings.header_end = end;
+            }
             SettingMsg::Bool(k, v) => {
                 let s = &mut self.settings;
                 match k {

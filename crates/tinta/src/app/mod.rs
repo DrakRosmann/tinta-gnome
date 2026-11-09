@@ -111,6 +111,7 @@ pub struct FindState {
 
 #[derive(Debug, Clone)]
 pub enum DialogState {
+    HeaderBar,
     CloseUnsaved(TabId),
     QuitUnsaved,
     ChangedOnDisk(DocId),
@@ -169,6 +170,8 @@ pub enum SettingMsg {
     Whitespace(tinta_core::settings::Whitespace),
     CursorStyle(tinta_core::settings::CursorStyle),
     AutoSave(AutoSave),
+    /// The header bar's buttons, left side and right side, as command ids.
+    HeaderBar(Vec<String>, Vec<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
