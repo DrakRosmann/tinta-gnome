@@ -299,11 +299,10 @@ impl Window {
             if let Some(ed) = focus.as_ref().and_then(|f| f.downcast_ref::<Editor>()) {
                 let vim_cmd = { let a = s.app.borrow(); a.settings.vim_mode && !a.vim.is_insert() };
                 let plain = !state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK);
-                if !vim_cmd && plain && let Some(ev) = c.current_event() {
-                    if ed.filter_key(&ev) {
+                if !vim_cmd && plain && let Some(ev) = c.current_event()
+                    && ed.filter_key(&ev) {
                         return glib::Propagation::Stop;
                     }
-                }
             }
             if in_field && (composing.get() || keys::is_dead(keyval)) && let Some(ev) = c.current_event() {
                 let was = composing.get();
@@ -526,13 +525,12 @@ impl Window {
         let active_tab = app.groups.get(app.active_group).and_then(|g| g.active_tab());
         // The keyboard goes where the app says, but only when that changes: clicks move it too.
         if last.focus != Some(app.focus) || (app.focus == Focus::Editor && (last.active_tab != active_tab || groups_changed)) {
-            if app.focus == Focus::Editor && app.palette.is_none() && app.dialog.is_none() {
-                if let Some(e) = self.active_editor(&app) {
+            if app.focus == Focus::Editor && app.palette.is_none() && app.dialog.is_none()
+                && let Some(e) = self.active_editor(&app) {
                     glib::idle_add_local_once(move || {
                         e.grab_focus();
                     });
                 }
-            }
             last.focus = Some(app.focus);
             last.active_tab = active_tab;
         }
@@ -891,11 +889,9 @@ impl GroupView {
         if index == app.active_group
             && let Some(active) = group.active_tab()
             && let Some((_, _, overlay, _)) = self.pages.borrow().iter().find(|(t, ..)| *t == active)
-        {
-            if let Some(win) = shell.window.get() {
+            && let Some(win) = shell.window.get() {
                 win.popups.attach(overlay);
             }
-        }
         self.syncing.set(false);
     }
 }

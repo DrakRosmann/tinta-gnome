@@ -12,6 +12,9 @@ pub const FIND_INPUT: &str = "find-input";
 pub const REPLACE_INPUT: &str = "replace-input";
 /// How many matches get highlighted. Replacing isn't limited by this.
 pub const MAX_SHOWN_MATCHES: usize = 100_000;
+/// Past this size, matches are looked for again only once typing pauses for a moment.
+const LAZY_FIND_CHARS: usize = 1_000_000;
+const LAZY_FIND_PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
 
 impl App {
     pub fn edit_opts(&self) -> EditOpts {
@@ -492,6 +495,16 @@ impl App {
 
     /// Recomputes matches when the query or the text changed.
     pub fn refresh_find_matches(&mut self) {
+        self.refresh_find_matches_with(false);
+    }
+
+    /// The same, except that a big file being typed into keeps its moved matches until the
+    /// typing pauses: looking through megabytes of text on every key would make each one lag.
+    pub fn refresh_find_matches_lazily(&mut self) {
+        self.refresh_find_matches_with(true);
+    }
+
+    fn refresh_find_matches_with(&mut self, lazy: bool) {
         // Vim's search lights up its matches without the find bar.
         let vim_q = self.vim_highlight.clone().filter(|_| !self.find.open);
         if !self.find.open && vim_q.is_none() {
@@ -509,6 +522,14 @@ impl App {
         let Some(e) = self.docs.get_mut(&doc_id) else { return };
         let key = (e.doc.revision, gen_id);
         if e.matches_key == Some(key) {
+            return;
+        }
+        let only_text_changed = e.matches_key.is_some_and(|(_, g)| g == gen_id);
+        if lazy
+            && only_text_changed
+            && e.doc.len_chars() > LAZY_FIND_CHARS
+            && e.last_edit.is_some_and(|t| t.elapsed() < LAZY_FIND_PAUSE)
+        {
             return;
         }
         e.matches_key = Some(key);

@@ -129,7 +129,8 @@ impl Popups {
         signature.set_wrap(true);
         signature.set_max_width_chars(80);
         signature.set_visible(false);
-        for (w, m) in [(&signature, 6)] {
+        {
+            let (w, m) = (&signature, 6);
             w.set_margin_start(m);
         }
 

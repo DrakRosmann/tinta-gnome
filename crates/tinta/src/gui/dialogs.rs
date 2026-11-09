@@ -211,11 +211,10 @@ impl Dialogs {
             });
             d.present(Some(&win.window));
             *self.prefs.borrow_mut() = Some(d);
-        } else if !app.settings_open && showing {
-            if let Some(d) = self.prefs.borrow_mut().take() {
+        } else if !app.settings_open && showing
+            && let Some(d) = self.prefs.borrow_mut().take() {
                 d.force_close();
             }
-        }
     }
 
     pub fn forget_prefs(&self) {

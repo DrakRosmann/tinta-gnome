@@ -381,7 +381,7 @@ impl Editor {
             .filter(|c| !sides.iter().flatten().any(|id| id == c.id()))
             .map(|c| (c, title_of(c).to_string()))
             .collect();
-        entries.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        entries.sort_by_key(|a| a.1.to_lowercase());
         let ids: Rc<Vec<(Command, String)>> = Rc::new(entries);
         for (c, title) in ids.iter() {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);

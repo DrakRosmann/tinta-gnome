@@ -357,8 +357,7 @@ impl Document {
         let mut old_chars = 0usize;
         for change in diff.ops() {
             let (old_range, new_range) = (change.old_range(), change.new_range());
-            let old_text: String = diff.old_slices()[old_range.clone()].concat();
-            let n = old_text.chars().count();
+            let n: usize = diff.old_slices()[old_range.clone()].iter().map(|l| l.chars().count()).sum();
             if change.tag() != similar::DiffTag::Equal {
                 let new_text: String = diff.new_slices()[new_range].concat();
                 edits.push(Edit::new(old_chars, old_chars + n, new_text));
@@ -382,13 +381,14 @@ impl Document {
 
     /// Chars in a line, without its newline.
     pub fn line_len(&self, line: usize) -> usize {
-        let slice = self.rope.line(line);
+        // A line past the end (a stale location: a build error, a bookmark) is empty, not a crash.
+        let Some(slice) = self.rope.get_line(line) else { return 0 };
         let n = slice.len_chars();
         if n > 0 && slice.char(n - 1) == '\n' { n - 1 } else { n }
     }
 
     pub fn line_start(&self, line: usize) -> usize {
-        self.rope.line_to_char(line)
+        self.rope.line_to_char(line.min(self.rope.len_lines()))
     }
 
     pub fn line_end(&self, line: usize) -> usize {
@@ -558,7 +558,23 @@ impl Document {
         kind: EditKind,
         after: impl FnOnce(&EditMap, &mut Cursors),
     ) -> EditMap {
+        // A range from stale positions (text that changed under a popup, a server's late reply)
+        // is cut to the text instead of taking the editor down.
+        let len = self.rope.len_chars();
+        for e in &mut edits {
+            e.end = e.end.min(len);
+            e.start = e.start.min(e.end);
+        }
         edits.sort_by_key(|e| (e.start, e.end));
+        // Overlaps would make the later edits land in the wrong place.
+        let mut reach = 0;
+        edits.retain(|e| {
+            let ok = e.start >= reach;
+            if ok {
+                reach = e.end;
+            }
+            ok
+        });
         let before = cursors.clone();
         let map = EditMap {
             items: edits
@@ -899,5 +915,26 @@ mod tests {
         assert_eq!(doc.undo.last().unwrap().changes.len(), 1);
         doc.undo(&mut cur);
         assert_eq!(doc.rope.to_string(), "a\nb\nc\n");
+    }
+
+    /// Ranges from stale positions are cut to the text, and overlapping ones don't double up.
+    #[test]
+    fn edits_out_of_range_or_overlapping_are_made_safe() {
+        let mut doc = Document::new("hello\n");
+        let mut cur = Cursors::single(Selection::cursor(0));
+        doc.apply(vec![Edit::new(4, 99, "!")], &mut cur, EditKind::Other, |_, _| {});
+        assert_eq!(doc.rope.to_string(), "hell!");
+        // Backwards: an insert where it ends.
+        doc.apply(vec![Edit::new(9, 3, "x")], &mut cur, EditKind::Other, |_, _| {});
+        assert_eq!(doc.rope.to_string(), "helxl!");
+        doc.apply(vec![Edit::new(0, 3, "A"), Edit::new(1, 2, "B")], &mut cur, EditKind::Other, |_, _| {});
+        assert_eq!(doc.rope.to_string(), "Axl!");
+        // Two cursors typing at one spot still both type.
+        doc.apply(vec![Edit::insert(0, "1"), Edit::insert(0, "2")], &mut cur, EditKind::Other, |_, _| {});
+        assert_eq!(doc.rope.to_string().len(), 6);
+        assert_eq!(doc.line_len(99), 0);
+        assert_eq!(doc.line_start(99), doc.len_chars());
+        while doc.undo(&mut cur) {}
+        assert_eq!(doc.rope.to_string(), "hello\n");
     }
 }

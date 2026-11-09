@@ -57,7 +57,7 @@ impl App {
         self.tabs.insert(id, tab);
         let title = self.tab_title(id);
         let group = &mut self.groups[self.active_group];
-        let builder = group.model.insert().text(title).data::<TabId>(id).closable();
+        let builder = group.model.insert().text(title).data(id).closable();
         builder.activate();
         id
     }
@@ -366,13 +366,13 @@ impl App {
                 let pos = g.model.position(ent).unwrap_or(0);
                 let was_active = g.model.active() == ent;
                 g.model.remove(ent);
-                if was_active && g.model.len() > 0 {
+                if was_active && !g.model.is_empty() {
                     let next = pos.min(g.model.len() as u16 - 1);
                     g.model.activate_position(next);
                 }
             }
             // An empty group goes away, unless it's the only one left.
-            if g.model.len() == 0 && self.groups.len() > 1 {
+            if g.model.is_empty() && self.groups.len() > 1 {
                 self.groups.remove(g_idx);
                 self.groups_changed.set(true);
                 if self.active_group >= g_idx && self.active_group > 0 {
@@ -381,8 +381,8 @@ impl App {
             }
         }
         let doc_id = tab.doc;
-        if !self.tabs.values().any(|t| t.doc == doc_id) {
-            if let Some(e) = self.docs.remove(&doc_id) {
+        if !self.tabs.values().any(|t| t.doc == doc_id)
+            && let Some(e) = self.docs.remove(&doc_id) {
                 session::remove_backup(&e.backup_key);
                 if let Some(p) = &e.doc.path {
                     if !e.is_read_only_view {
@@ -391,7 +391,6 @@ impl App {
                     self.lsp_close_doc(p, e.lsp_key.as_deref());
                 }
             }
-        }
         self.close_popups();
         self.update_watches();
         self.mark_session_dirty();
@@ -539,13 +538,13 @@ impl App {
                 for ts in &gs.tabs {
                     tasks.push(self.restore_tab(ts));
                 }
-                if self.groups[i].model.len() > 0 {
+                if !self.groups[i].model.is_empty() {
                     let pos = gs.active.min(self.groups[i].model.len() - 1) as u16;
                     self.groups[i].model.activate_position(pos);
                 }
             }
             self.groups_changed.set(true);
-            self.groups.retain(|g| g.model.len() > 0);
+            self.groups.retain(|g| !g.model.is_empty());
             if self.groups.is_empty() {
                 self.groups.push(Group::new());
             }
@@ -800,15 +799,15 @@ impl App {
             self.clamp_scroll(id);
         }
         if any_change {
-            self.advance_highlighting(Duration::from_millis(3));
+            self.highlight_what_is_on_screen(Duration::from_millis(3));
             self.refresh_tab_titles();
             self.after_caret_move();
             self.mark_session_dirty();
-            self.refresh_find_matches();
+            self.refresh_find_matches_lazily();
             self.refresh_previews();
             tasks.push(self.update_title());
         } else {
-            self.refresh_find_matches();
+            self.refresh_find_matches_lazily();
         }
         Task::batch(tasks)
     }
@@ -861,7 +860,26 @@ impl App {
         e.git_stale = true;
         e.lsp_dirty = true;
         e.last_edit = Some(now);
-        e.matches_key = None;
+        // The highlighted matches move with the text until they're looked for again; the key
+        // (which has the revision) already says they're out of date.
+        // Many edits at once (replace all) over many matches: cheaper to look again.
+        if log.len().saturating_mul(e.matches.len()) > 2_000_000 {
+            e.matches.clear();
+        }
+        for c in log {
+            let old_end = c.at + c.removed;
+            e.matches.retain_mut(|m| {
+                if m.1 <= c.at {
+                    true
+                } else if m.0 >= old_end {
+                    m.0 = m.0 - c.removed + c.inserted;
+                    m.1 = m.1 - c.removed + c.inserted;
+                    true
+                } else {
+                    false
+                }
+            });
+        }
         e.symbols_rev = None;
         e.blame = None;
         // Find-in-selection ranges follow the text.
@@ -927,6 +945,23 @@ impl App {
                 && let Some(h) = &mut e.doc.highlighter
             {
                 h.advance(&e.doc.rope, budget);
+            }
+        }
+    }
+
+    /// Right after an edit: colors the lines on screen again, so the text doesn't show a frame
+    /// with stale colors. The rest of the file is left to the frame ticks.
+    pub fn highlight_what_is_on_screen(&mut self, budget: Duration) {
+        let line_h = self.metrics.line_h.max(1.0);
+        let shown: Vec<TabId> = self.groups.iter().filter_map(Group::active_tab).collect();
+        for id in shown {
+            let Some(t) = self.tabs.get(&id) else { continue };
+            let Some(e) = self.docs.get_mut(&t.doc) else { continue };
+            let rows = t.map.row_count(&e.doc);
+            let bottom = (((t.scroll_y + t.view_h) / line_h) as usize + 1).min(rows.saturating_sub(1));
+            let last = t.map.row(&e.doc, bottom).line as usize;
+            if let Some(h) = &mut e.doc.highlighter {
+                h.advance_through(&e.doc.rope, last, budget);
             }
         }
     }

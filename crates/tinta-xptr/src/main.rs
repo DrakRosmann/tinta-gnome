@@ -131,7 +131,7 @@ fn main() {
                     .expect("get_image");
                 // BGRX on every X server we care about.
                 let mut rgba = Vec::with_capacity(img.data.len());
-                for p in img.data.chunks_exact(4) {
+                for p in img.data.as_chunks::<4>().0 {
                     rgba.extend_from_slice(&[p[2], p[1], p[0], 255]);
                 }
                 image::RgbaImage::from_raw(g.width as u32, g.height as u32, rgba).unwrap().save(rest[0]).unwrap();

@@ -52,16 +52,12 @@ pub enum AppTheme {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
+#[derive(Default)]
 pub struct LspServer {
     pub command: String,
     pub args: Vec<String>,
 }
 
-impl Default for LspServer {
-    fn default() -> Self {
-        Self { command: String::new(), args: Vec::new() }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

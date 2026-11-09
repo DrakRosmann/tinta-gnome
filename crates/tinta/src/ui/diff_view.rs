@@ -204,7 +204,7 @@ impl<'a, Message: Clone + 'a> DiffView<'a, Message> {
                         let xb = text_x + col_to_vcol(doc, line, *b2 as usize) as f32 * m.cell_w;
                         let rect = Rectangle::new(Point::new(xa.max(text_clip.x), y), Size::new((xb - xa.max(text_clip.x)).max(0.0), m.line_h));
                         r.fill_quad(
-                            Quad { bounds: rect, border: Border { radius: 2.0, ..Border::default() }, ..Quad::default() },
+                            Quad { bounds: rect, border: Border { radius: 2.0, ..Border::default() } },
                             alpha(base, 0.38),
                         );
                     }

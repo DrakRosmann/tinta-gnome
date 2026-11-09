@@ -562,10 +562,13 @@ impl Vim {
     fn set_caret(&mut self, ctx: &mut Ctx<'_>, pos: usize) {
         match self.mode {
             Mode::Visual => {
-                let s = if pos >= self.anchor {
-                    Selection::new(self.anchor, (pos + 1).min(ctx.doc.len_chars()))
+                // The anchor can sit at the very end, or past it once the text got shorter.
+                let len = ctx.doc.len_chars();
+                let anchor = self.anchor.min(len);
+                let s = if pos >= anchor {
+                    Selection::new(anchor, (pos + 1).min(len))
                 } else {
-                    Selection::new(self.anchor + 1, pos)
+                    Selection::new((anchor + 1).min(len), pos)
                 };
                 ctx.cur.set_single(s);
             }
@@ -914,7 +917,7 @@ impl Vim {
             'v' => self.enter_visual(ctx, Mode::VisualBlock),
             'a' | 'x' => {
                 let delta = if c == 'a' { 1 } else { -1 } * self.take_count() as i64;
-                self.begin_change(&[key.clone()]);
+                self.begin_change(std::slice::from_ref(&key));
                 add_to_number(ctx, delta);
                 self.end_change();
             }
@@ -1837,7 +1840,7 @@ fn text_object(doc: &Document, pos: usize, c: char, around: bool) -> Option<(usi
             let col = pos - start;
             let quotes: Vec<usize> = text.iter().enumerate().filter(|(i, x)| **x == c && (*i == 0 || text[*i - 1] != '\\')).map(|(i, _)| i).collect();
             // The pair around the caret, or the next one on the line.
-            let pair = quotes.chunks_exact(2).find(|p| col <= p[1])?;
+            let pair = quotes.as_chunks::<2>().0.iter().find(|p| col <= p[1])?;
             let (qa, qb) = (pair[0], pair[1]);
             if around {
                 let mut e = qb + 1;
@@ -2029,6 +2032,23 @@ mod tests {
         let mut t = T::new(start);
         t.keys(keys);
         assert_eq!(t.show(), want, "{start:?} after {keys:?}");
+    }
+
+    /// Text cut short under a visual selection (another view, a reload) leaves its start past the
+    /// end; moving on from there stays inside the text.
+    #[test]
+    fn visual_selection_survives_the_text_shrinking_under_it() {
+        let mut t = T::new("abc\nde|f\n");
+        t.keys("v");
+        let len = t.doc.len_chars();
+        let mut c = Cursors::single(Selection::cursor(0));
+        t.doc.apply(vec![crate::Edit::delete(1, len)], &mut c, crate::EditKind::Other, |_, _| {});
+        t.cur = Cursors::single(Selection::cursor(1));
+        t.keys("h");
+        let n = t.doc.len_chars();
+        for s in t.cur.iter() {
+            assert!(s.anchor <= n && s.head <= n, "{s:?} past {n}");
+        }
     }
 
     #[test]
