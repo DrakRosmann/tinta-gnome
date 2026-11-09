@@ -162,6 +162,36 @@ pub fn by_name(name: &str) -> &'static Language {
     languages().iter().find(|l| l.name.eq_ignore_ascii_case(name)).unwrap_or_else(plain)
 }
 
+/// The programming language most of these files are in, for a new file in that folder. Notes,
+/// data and configuration files don't count: a C project with a README is a C project.
+pub fn dominant<'a>(paths: impl IntoIterator<Item = &'a str>) -> Option<&'static Language> {
+    const NOT_CODE: &[&str] = &[
+        "Plain Text", "Markdown", "MultiMarkdown", "JSON", "YAML", "TOML", "XML", "INI", "CSV", "TSV", "Makefile",
+        "CMake", "Diff", "Git Ignore", "Git Attributes", "Git Config", "Git Commit", "reStructuredText", "LaTeX",
+        "Dockerfile", "Properties", "SVG",
+    ];
+    let mut counts: Vec<(&'static Language, usize)> = Vec::new();
+    for p in paths.into_iter().take(20_000) {
+        let path = Path::new(p);
+        if path.extension().is_none() {
+            continue;
+        }
+        let l = detect(path, "");
+        if std::ptr::eq(l, plain()) || NOT_CODE.iter().any(|n| l.name.eq_ignore_ascii_case(n)) {
+            continue;
+        }
+        match counts.iter_mut().find(|(k, _)| std::ptr::eq(*k, l)) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((l, 1)),
+        }
+    }
+    // The first seen wins a tie: max_by_key would take the last.
+    counts.into_iter().fold(None, |best: Option<(&'static Language, usize)>, (l, n)| match best {
+        Some((_, b)) if b >= n => best,
+        _ => Some((l, n)),
+    }).map(|(l, _)| l)
+}
+
 /// Works out the language from the file name, or failing that its first line (a shebang, say).
 pub fn detect(path: &Path, first_line: &str) -> &'static Language {
     let ss = syntax_set();
@@ -201,6 +231,14 @@ pub fn detect(path: &Path, first_line: &str) -> &'static Language {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_folder_of_c_files_is_a_c_folder() {
+        let files = ["README.md", "prova.c", "exerc1.c", "exerc2.c", "util.h", ".vscode/settings.json", "Makefile"];
+        assert_eq!(dominant(files).map(|l| l.name.as_str()), Some("C"));
+        assert_eq!(dominant(["notes.md", "data.json"]).map(|l| l.name.as_str()), None);
+        assert_eq!(dominant(["a.py", "b.rs"]).map(|l| l.name.as_str()), Some("Python"));
+    }
 
     #[test]
     fn detects_common_languages() {
