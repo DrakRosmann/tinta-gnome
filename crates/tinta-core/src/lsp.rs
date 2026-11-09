@@ -125,7 +125,7 @@ impl CompletionItem {
     /// A short tag for the list, from the LSP kind number.
     pub fn kind_label(&self) -> &'static str {
         match self.kind {
-            2 | 3 | 4 => "fn",
+            2..=4 => "fn",
             5 | 10 => "field",
             6 | 12 => "var",
             7 | 8 | 22 => "type",

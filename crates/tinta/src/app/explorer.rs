@@ -279,7 +279,7 @@ impl App {
             self.focus = Focus::Editor;
             return Some(fx::focus_editor());
         }
-        let Some(cur) = self.explorer_cursor() else { return None };
+        let cur = self.explorer_cursor()?;
         let last = self.explorer.rows.len() - 1;
         let row = self.explorer.rows[cur].clone();
         let page = ((self.explorer.view_h / 26.0) as usize).max(2) - 1;

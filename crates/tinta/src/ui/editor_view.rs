@@ -311,7 +311,7 @@ fn quad(r: &mut Renderer, bounds: Rectangle, color: Color) {
 
 fn rquad(r: &mut Renderer, bounds: Rectangle, color: Color, radius: f32) {
     r.fill_quad(
-        Quad { bounds, border: Border { radius: radius, ..Border::default() }, ..Quad::default() },
+        Quad { bounds, border: Border { radius, ..Border::default() } },
         color,
     );
 }
@@ -920,7 +920,6 @@ impl<Message: Clone> EditorView<'_, Message> {
                                 Quad {
                                     bounds: rect,
                                     border: Border { color: alpha(pal.fg, 0.55), width: 1.0, radius: 2.0 },
-                                    ..Quad::default()
                                 },
                                 alpha(pal.accent, 0.18),
                             );

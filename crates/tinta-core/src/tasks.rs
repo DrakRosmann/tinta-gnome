@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Task {
     pub name: String,
     pub command: String,
@@ -16,11 +17,6 @@ pub struct Task {
     pub group: String,
 }
 
-impl Default for Task {
-    fn default() -> Self {
-        Self { name: String::new(), command: String::new(), cwd: None, group: String::new() }
-    }
-}
 
 fn task(name: &str, command: &str, group: &str) -> Task {
     Task { name: name.into(), command: command.into(), cwd: None, group: group.into() }

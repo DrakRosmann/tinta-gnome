@@ -203,7 +203,7 @@ impl TabBuilder<'_> {
         self.text = t;
         self
     }
-    pub fn data<T>(mut self, id: TabId) -> Self {
+    pub fn data(mut self, id: TabId) -> Self {
         self.id = Some(id);
         self
     }
@@ -276,7 +276,7 @@ impl TabModel {
     pub fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
         self.items.iter().map(|(t, _)| *t)
     }
-    pub fn data<T>(&self, e: Entity) -> Option<&TabId> {
+    pub fn data(&self, e: Entity) -> Option<&TabId> {
         self.items.iter().find(|(t, _)| *t == e).map(|(t, _)| t)
     }
 }
@@ -292,7 +292,7 @@ impl Group {
     }
 
     pub fn active_tab(&self) -> Option<TabId> {
-        self.model.data::<TabId>(self.model.active()).copied()
+        self.model.data(self.model.active()).copied()
     }
 
     pub fn tabs(&self) -> Vec<TabId> {
