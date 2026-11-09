@@ -91,6 +91,73 @@ fn small(shell: &Rc<Shell>, icon: &str, tip: &str, msg: impl Fn() -> Message + '
     b
 }
 
+/// The explorer's less used actions, and its two filters, in a popover.
+fn explorer_more(shell: &Rc<Shell>) -> gtk::MenuButton {
+    use crate::app::{BoolSetting, SettingMsg};
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let pop = gtk::Popover::builder().child(&body).has_arrow(true).build();
+    pop.add_css_class("menu");
+    let entry = |icon: &str, label: &str, msg: fn() -> Message| {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        row.append(&gtk::Image::from_icon_name(icon));
+        row.append(&gtk::Label::new(Some(label)));
+        let b = gtk::Button::builder().child(&row).build();
+        b.add_css_class("flat");
+        let (s, p) = (Rc::downgrade(shell), pop.clone());
+        b.connect_clicked(move |_| {
+            p.popdown();
+            if let Some(s) = s.upgrade() {
+                s.dispatch(msg());
+            }
+        });
+        body.append(&b);
+    };
+    entry("folder-new-symbolic", tr("New Folder"), || Message::Explorer(ExplorerMsg::NewFolder(None)));
+    entry("view-refresh-symbolic", tr("Refresh"), || Message::Explorer(ExplorerMsg::Refresh));
+    entry("view-restore-symbolic", tr("Collapse All"), || Message::Explorer(ExplorerMsg::CollapseAll));
+    body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let toggles: Vec<(gtk::CheckButton, BoolSetting)> = [("Show hidden files", BoolSetting::ShowHidden), ("Hide compiled programs", BoolSetting::HideBuildOutputs)]
+        .into_iter()
+        .map(|(label, key)| {
+            let c = gtk::CheckButton::with_label(tr(label));
+            c.set_margin_start(6);
+            c.set_margin_end(6);
+            body.append(&c);
+            (c, key)
+        })
+        .collect();
+    // The checks follow the settings each time the menu opens; a click is a user's change only
+    // after that.
+    let syncing = Rc::new(std::cell::Cell::new(false));
+    for (c, key) in &toggles {
+        let (s, key, syncing) = (Rc::downgrade(shell), *key, syncing.clone());
+        c.connect_toggled(move |c| {
+            if syncing.get() {
+                return;
+            }
+            if let Some(s) = s.upgrade() {
+                s.dispatch(Message::Setting(SettingMsg::Bool(key, c.is_active())));
+            }
+        });
+    }
+    let s = Rc::downgrade(shell);
+    pop.connect_show(move |_| {
+        let Some(s) = s.upgrade() else { return };
+        let Ok(app) = s.app.try_borrow() else { return };
+        syncing.set(true);
+        for (c, key) in &toggles {
+            c.set_active(match key {
+                BoolSetting::ShowHidden => app.settings.show_hidden_files,
+                _ => app.settings.hide_build_outputs,
+            });
+        }
+        syncing.set(false);
+    });
+    let b = gtk::MenuButton::builder().icon_name("view-more-symbolic").tooltip_text(tr("More")).popover(&pop).build();
+    b.add_css_class("flat");
+    b
+}
+
 fn git_class(mark: char) -> &'static str {
     match mark {
         'A' | '?' => "success",
@@ -239,16 +306,16 @@ impl Sidebar {
             Some(secondary),
         );
         let explorer_page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        explorer_page.append(&header(
+        // Two buttons in sight leave room for the folder's name; the rest wait under "⋯".
+        let explorer_header = header(
             &explorer_title,
             &[
-                small(shell, "folder-open-symbolic", tr("Open Folder"), || Message::Cmd(Command::OpenFolder)),
                 small(shell, "document-new-symbolic", tr("New File"), || Message::Explorer(ExplorerMsg::NewFile(None))),
-                small(shell, "folder-new-symbolic", tr("New Folder"), || Message::Explorer(ExplorerMsg::NewFolder(None))),
-                small(shell, "view-refresh-symbolic", tr("Refresh"), || Message::Explorer(ExplorerMsg::Refresh)),
-                small(shell, "view-restore-symbolic", tr("Collapse All"), || Message::Explorer(ExplorerMsg::CollapseAll)),
+                small(shell, "folder-open-symbolic", tr("Open Folder"), || Message::Cmd(Command::OpenFolder)),
             ],
-        ));
+        );
+        explorer_header.append(&explorer_more(shell));
+        explorer_page.append(&explorer_header);
         let explorer_empty = adw::StatusPage::builder().icon_name("folder-symbolic").title(tr("No folder open")).vexpand(true).build();
         explorer_empty.add_css_class("compact");
         let open = gtk::Button::with_label(tr("Open Folder"));

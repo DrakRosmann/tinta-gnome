@@ -102,6 +102,9 @@ pub struct Settings {
     pub restore_session: bool,
     pub hot_exit: bool,
     pub show_hidden_files: bool,
+    /// Leaves out of the file tree the programs built next to their source: `prova` beside
+    /// `prova.c`.
+    pub hide_build_outputs: bool,
     pub lsp_enabled: bool,
     pub lsp_servers: HashMap<String, LspServer>,
     /// How Ctrl+F5 runs files, by language or `.extension`, before the built-in table.
@@ -164,6 +167,7 @@ impl Default for Settings {
             restore_session: true,
             hot_exit: true,
             show_hidden_files: true,
+            hide_build_outputs: true,
             lsp_enabled: true,
             lsp_servers: HashMap::new(),
             run_commands: HashMap::new(),

@@ -361,6 +361,7 @@ fn prefs_dialog(shell: &Rc<Shell>, st: &Settings, app: &App) -> adw::Preferences
         ("Restore session", st.restore_session, B::RestoreSession),
         ("Keep unsaved work between runs", st.hot_exit, B::HotExit),
         ("Show hidden files", st.show_hidden_files, B::ShowHidden),
+        ("Hide compiled programs", st.hide_build_outputs, B::HideBuildOutputs),
     ] {
         files.add(&switch(shell, t, v, k));
     }

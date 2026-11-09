@@ -200,6 +200,7 @@ pub enum BoolSetting {
     RestoreSession,
     HotExit,
     ShowHidden,
+    HideBuildOutputs,
     Lsp,
     Vim,
 }
