@@ -42,8 +42,8 @@ pub fn accel(label: &str) -> Option<String> {
         "right" => "Right",
         "home" => "Home",
         "end" => "End",
-        "pageup" => "Page_Up",
-        "pagedown" => "Page_Down",
+        "pageup" | "pgup" => "Page_Up",
+        "pagedown" | "pgdn" => "Page_Down",
         "/" => "slash",
         "\\" => "backslash",
         "." => "period",
@@ -237,4 +237,30 @@ pub fn install_actions(gapp: &adw::Application, _window: &adw::ApplicationWindow
         }
     });
     gapp.add_action(&action);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every shortcut shown in a menu turns into a key GTK knows: one character or a keysym name.
+    #[test]
+    fn every_default_shortcut_becomes_a_gtk_accelerator() {
+        const NAMES: &[&str] = &[
+            "Return", "Tab", "space", "BackSpace", "Delete", "Insert", "Escape", "Up", "Down", "Left", "Right", "Home", "End",
+            "Page_Up", "Page_Down", "slash", "backslash", "period", "comma", "semicolon", "apostrophe", "grave",
+            "bracketleft", "bracketright", "equal", "minus",
+        ];
+        let km = Keymap::with_defaults();
+        for c in Command::ALL {
+            let Some(label) = km.label(*c) else { continue };
+            if label.contains(' ') {
+                continue;
+            }
+            let a = accel(label).unwrap_or_else(|| panic!("{label}: no accelerator"));
+            let key = a.rsplit('>').next().unwrap();
+            let f_key = key.strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok());
+            assert!(key.chars().count() == 1 || f_key || NAMES.contains(&key), "{label} -> {a}");
+        }
+    }
 }
