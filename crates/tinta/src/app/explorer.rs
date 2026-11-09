@@ -58,7 +58,19 @@ pub enum RowAction {
     Terminal,
 }
 
-fn list_dir(dir: &Path, hidden: bool) -> Vec<(String, PathBuf, bool)> {
+/// Languages whose compilers leave the program beside the source, named after it.
+const COMPILED: &[&str] = &["c", "cc", "cpp", "cxx", "c++", "rs", "go", "zig", "hs", "m", "f", "f90", "pas", "nim", "d", "cr", "ml"];
+
+/// A program built from a source next to it: no extension, executable, and `name.c` (or the
+/// like) in the same folder.
+fn is_build_output(name: &str, path: &Path, siblings: &std::collections::HashSet<String>) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    !name.contains('.')
+        && COMPILED.iter().any(|ext| siblings.contains(&format!("{name}.{ext}")))
+        && std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+fn list_dir(dir: &Path, hidden: bool, hide_outputs: bool) -> Vec<(String, PathBuf, bool)> {
     let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut items: Vec<(String, PathBuf, bool)> = read
         .flatten()
@@ -73,6 +85,10 @@ fn list_dir(dir: &Path, hidden: bool) -> Vec<(String, PathBuf, bool)> {
             Some((name, path, is_dir))
         })
         .collect();
+    if hide_outputs {
+        let names: std::collections::HashSet<String> = items.iter().filter(|i| !i.2).map(|i| i.0.clone()).collect();
+        items.retain(|(name, path, is_dir)| *is_dir || !is_build_output(name, path, &names));
+    }
     items.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
     items
 }
@@ -83,16 +99,16 @@ impl App {
             self.explorer.rows.clear();
             return;
         };
-        let hidden = self.settings.show_hidden_files;
+        let (hidden, outputs) = (self.settings.show_hidden_files, self.settings.hide_build_outputs);
         let mut rows = Vec::new();
-        self.flatten_into(&mut rows, list_dir(&root, hidden), 0);
+        self.flatten_into(&mut rows, list_dir(&root, hidden, outputs), 0);
         self.explorer.rows = rows;
         self.update_watches();
     }
 
     /// Depth first, walking down into the expanded folders.
     fn flatten_into(&self, rows: &mut Vec<Row>, items: Vec<(String, PathBuf, bool)>, depth: usize) {
-        let hidden = self.settings.show_hidden_files;
+        let (hidden, outputs) = (self.settings.show_hidden_files, self.settings.hide_build_outputs);
         for (name, path, is_dir) in items {
             let expanded = is_dir && self.explorer.expanded.contains(&path);
             rows.push(Row {
@@ -105,7 +121,7 @@ impl App {
                 expanded,
             });
             if expanded {
-                self.flatten_into(rows, list_dir(&path, hidden), depth + 1);
+                self.flatten_into(rows, list_dir(&path, hidden, outputs), depth + 1);
             }
         }
     }

@@ -824,6 +824,10 @@ impl App {
                         self.reload_explorer();
                         self.index_files();
                     }
+                    BoolSetting::HideBuildOutputs => {
+                        s.hide_build_outputs = v;
+                        self.reload_explorer();
+                    }
                     BoolSetting::Lsp => s.lsp_enabled = v,
                     BoolSetting::Vim => {
                         s.vim_mode = v;

@@ -102,6 +102,10 @@ impl App {
         doc.indent = self.default_indent();
         let n = self.docs.values().filter(|e| e.doc.path.is_none() && !e.is_read_only_view).count() + 1;
         doc.scratch_name = format!("{} {n}", if self.pt() { "Sem título" } else { "Untitled" });
+        // In a folder of C files, a new file is most likely C too.
+        if let Some(l) = tinta_core::language::dominant(self.file_index.iter().map(String::as_str)) {
+            doc.language = l;
+        }
         let id = self.make_entry(doc);
         self.add_tab(id);
         self.focus = Focus::Editor;

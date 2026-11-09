@@ -26,7 +26,7 @@ e a interface foi reescrita com os componentes do GNOME.
   muda junto quando elas mudam
 - Barra de cima editável: um clique com o botão direito nela, ou "Editar barra superior…" no menu,
   escolhe quais comandos viram botões, de que lado e em que ordem. Cada botão mostra o atalho ao
-  passar o mouse
+  passar o mouse. Os botões trocam de lugar pelas setas ou arrastando
 - Uma janela só: `tinta-gnome arquivo` abre na janela que já está aberta (pelo `GtkApplication`)
 - Acentos com teclas mortas e métodos de entrada pelo GTK. Em ambientes sem método de entrada, o
   editor e os campos de texto compõem sozinhos, então `´` e `a` ainda dão `á`

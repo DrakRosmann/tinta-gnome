@@ -33,6 +33,15 @@ pub fn run() -> glib::ExitCode {
         // SAFETY: GTK hasn't started and no other thread exists yet.
         unsafe { std::env::remove_var("GTK_THEME") };
     }
+    // GTK reads the system's Compose table for dead keys, and that table has entries its parser
+    // can't take (U+01B1, U+03D2, keys past 16 bits): it says so each time it loads it, about
+    // nothing the user can fix. Only those messages are dropped.
+    glib::log_set_writer_func(|level, fields| {
+        let field = |k: &str| fields.iter().find(|f| f.key() == k).and_then(|f| f.value_str());
+        const COMPOSE: [&str; 3] = ["Can't handle Unicode codepoint", "Can't handle >16bit keyvals", "Can't handle > 16bit Unicode codepoints"];
+        let compose = field("GLIB_DOMAIN") == Some("Gtk") && field("MESSAGE").is_some_and(|m| COMPOSE.iter().any(|c| m.starts_with(c)));
+        if compose { glib::LogWriterOutput::Handled } else { glib::log_writer_default(level, fields) }
+    });
     let args: Vec<String> = std::env::args().collect();
     // `--new-session` is an editor of its own: it doesn't join the one already running.
     let mut flags = gio::ApplicationFlags::HANDLES_COMMAND_LINE | gio::ApplicationFlags::HANDLES_OPEN;

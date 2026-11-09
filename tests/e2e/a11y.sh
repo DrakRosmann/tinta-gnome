@@ -11,13 +11,16 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 app=${TINTA_APP:-$root/target/release/tinta-gnome}
+# Arch keeps the AT-SPI daemons in /usr/lib, Fedora and Debian in /usr/libexec.
+libexec=/usr/lib
+[ -x /usr/libexec/at-spi-bus-launcher ] && libexec=/usr/libexec
 mkdir -m700 "$work/run"
 printf 'fn main(){\n    let a = 1;\n}\n' > "$work/a.rs"
 printf 'wait 600\nopen %s/a.rs\nwait 3500\nkey Down\nwait 300\nkey End\nwait 300\ntype x\nwait 300\nkey BackSpace\nwait 3000\nquit\n' "$work" > "$work/steps.txt"
 cat > "$work/inner.sh" <<INNER
-/usr/lib/at-spi-bus-launcher --launch-immediately >/dev/null 2>&1 &
+$libexec/at-spi-bus-launcher --launch-immediately >/dev/null 2>&1 &
 sleep 1
-/usr/lib/at-spi2-registryd --use-gnome-session=false >/dev/null 2>&1 &
+$libexec/at-spi2-registryd --use-gnome-session=false >/dev/null 2>&1 &
 sleep 1
 XDG_CONFIG_HOME=$work/cfg XDG_STATE_HOME=$work/state XDG_CACHE_HOME=$work/cache TINTA_SCRIPT=$work/steps.txt GTK_A11Y=atspi \
     timeout 30 "$app" --new-session >/dev/null 2>&1 &
