@@ -336,6 +336,22 @@ pub fn cosmic_theme(dark: bool) -> Theme {
     } else {
         [0x24272C, 0x6B7380, 0x7A3FD1, 0x2F7D1E, 0xB25E00, 0x0B62C4, 0x007F73, 0xB5345F, 0xC22F2F, 0x2B6C94, 0xC00000]
     };
+    build_theme(if dark { "COSMIC Dark" } else { "COSMIC Light" }, p)
+}
+
+/// GNOME's Adwaita palette (the colours of the HIG, as in GtkSourceView's Adwaita schemes),
+/// one for dark windows and one for light.
+pub fn adwaita_theme(dark: bool) -> Theme {
+    let p: [u32; 11] = if dark {
+        // fg, comment, keyword, string, number, function, type, variable, tag, operator, invalid
+        [0xDEDDDA, 0x9A9996, 0xFFA348, 0xF8E45C, 0xDC8ADD, 0x99C1F1, 0x8FF0A4, 0xF66151, 0x62A0EA, 0xC0BFBC, 0xFF7B63]
+    } else {
+        [0x241F31, 0x77767B, 0xC64600, 0x986A44, 0x813D9C, 0x1A5FB4, 0x26A269, 0xC01C28, 0x1C71D8, 0x5E5C64, 0xE01B24]
+    };
+    build_theme(if dark { "Adwaita Dark" } else { "Adwaita Light" }, p)
+}
+
+fn build_theme(name: &str, p: [u32; 11]) -> Theme {
     let [fg, comment, keyword, string, number, function, ty, variable, tag, operator, invalid] = p;
     let italic = Some(FontStyle::ITALIC);
     let bold = Some(FontStyle::BOLD);
@@ -367,16 +383,16 @@ pub fn cosmic_theme(dark: bool) -> Theme {
         item("invalid, invalid.illegal", invalid, None),
     ];
     Theme {
-        name: Some(if dark { "COSMIC Dark" } else { "COSMIC Light" }.into()),
+        name: Some(name.into()),
         author: None,
         settings: ThemeSettings { foreground: Some(color(fg)), ..ThemeSettings::default() },
         scopes,
     }
 }
 
-/// Names shown in settings: "COSMIC" follows the desktop, the rest are fixed.
+/// Names shown in settings: "COSMIC" and "Adwaita" follow the desktop, the rest are fixed.
 pub fn theme_names() -> Vec<String> {
-    let mut out = vec!["COSMIC".to_string()];
+    let mut out = vec!["COSMIC".to_string(), "Adwaita".to_string()];
     out.extend(extra_themes().iter().map(|(n, _)| n.clone()));
     out
 }
@@ -411,6 +427,12 @@ fn extra_themes() -> &'static Vec<(String, Arc<Theme>)> {
 pub fn theme_by_name(name: &str, dark: bool) -> Arc<Theme> {
     if let Some((_, t)) = extra_themes().iter().find(|(n, _)| n == name) {
         return t.clone();
+    }
+    if name == "Adwaita" {
+        static AD: OnceLock<Arc<Theme>> = OnceLock::new();
+        static AL: OnceLock<Arc<Theme>> = OnceLock::new();
+        let cell = if dark { &AD } else { &AL };
+        return cell.get_or_init(|| Arc::new(adwaita_theme(dark))).clone();
     }
     static D: OnceLock<Arc<Theme>> = OnceLock::new();
     static L: OnceLock<Arc<Theme>> = OnceLock::new();
@@ -447,6 +469,10 @@ mod tests {
     fn all_cosmic_selectors_parse_and_every_language_loads() {
         cosmic_theme(true);
         cosmic_theme(false);
+        adwaita_theme(true);
+        adwaita_theme(false);
+        assert_eq!(theme_by_name("Adwaita", true).name.as_deref(), Some("Adwaita Dark"));
+        assert_eq!(theme_by_name("Adwaita", false).name.as_deref(), Some("Adwaita Light"));
         assert!(syntax_set().syntaxes().len() > 100);
         assert!(theme_names().len() > 10);
     }

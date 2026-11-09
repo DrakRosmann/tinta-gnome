@@ -57,7 +57,8 @@ para os aplicativos GTK.
 
 - Destaque de sintaxe para 220 gramáticas, incremental: digitar no meio de um arquivo de
   300 mil linhas reprocessa só o que mudou
-- 13 temas de cores para o código, além do padrão, que acompanha o claro e o escuro do sistema
+- 13 temas de cores para o código, além do padrão e do Adwaita (a paleta do GNOME), que
+  acompanham o claro e o escuro do sistema
 - Parênteses coloridos por profundidade, ignorando strings e comentários
 - Minimapa, guias de indentação, rolagem aderente, réguas, espaços visíveis
 - Dobra de código, quebra de linha, números de linha absolutos ou relativos, a partir da árvore de
