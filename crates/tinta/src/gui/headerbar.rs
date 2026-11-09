@@ -6,6 +6,7 @@ use super::Shell;
 use crate::app::{App, DialogMsg, Message, SettingMsg};
 use crate::i18n::{is_portuguese, tr};
 use adw::prelude::*;
+use gtk::glib;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use tinta_core::keymap::Command;
@@ -33,9 +34,9 @@ pub fn icon_for(c: Command) -> Option<&'static str> {
         C::QuickOpen => "document-open-recent-symbolic",
         C::ToggleSidebar => "sidebar-show-symbolic",
         C::ShowExplorer => "folder-symbolic",
-        C::ShowGit => "vcs-branch-symbolic",
+        C::ShowGit => "tinta-git-symbolic",
         C::ShowOutline => "view-list-symbolic",
-        C::ShowDebug => "bug-symbolic",
+        C::ShowDebug => "tinta-debug-symbolic",
         C::TogglePanel => "view-dual-symbolic",
         C::ShowProblems => "dialog-warning-symbolic",
         C::SplitRight => "view-dual-symbolic",
@@ -60,9 +61,9 @@ pub fn icon_for(c: Command) -> Option<&'static str> {
         C::DebugStop => "media-playback-stop-symbolic",
         C::DebugPause => "media-playback-pause-symbolic",
         C::DebugRestart => "view-refresh-symbolic",
-        C::StepOver => "go-jump-symbolic",
-        C::StepInto => "go-bottom-symbolic",
-        C::StepOut => "go-top-symbolic",
+        C::StepOver => "tinta-step-over-symbolic",
+        C::StepInto => "tinta-step-in-symbolic",
+        C::StepOut => "tinta-step-out-symbolic",
         C::OpenSettings => "emblem-system-symbolic",
         C::EditHeaderBar => "document-edit-symbolic",
         C::ShowShortcuts => "preferences-desktop-keyboard-shortcuts-symbolic",
@@ -193,12 +194,75 @@ pub fn editor_dialog(shell: &Rc<Shell>, app: &App) -> adw::Dialog {
     d
 }
 
+/// The two sides of the bar, left and right, each as command ids from left to right.
+pub type Sides = [Vec<String>; 2];
+
+/// What the editor's buttons and drags do to the two lists. Kept apart from the widgets so the
+/// tests can go through every one of them.
+pub mod edit {
+    use super::Sides;
+
+    /// One place to the left (`-1`) or to the right (`1`) on the same side.
+    pub fn shift(s: &mut Sides, side: usize, i: usize, by: isize) {
+        let j = i as isize + by;
+        if i < s[side].len() && j >= 0 && (j as usize) < s[side].len() {
+            s[side].swap(i, j as usize);
+        }
+    }
+
+    /// To the other side, toward the middle of the bar: the end of the left, the start of the right.
+    pub fn across(s: &mut Sides, side: usize, i: usize) {
+        if i >= s[side].len() {
+            return;
+        }
+        let id = s[side].remove(i);
+        if side == 0 { s[1].insert(0, id) } else { s[0].push(id) }
+    }
+
+    pub fn remove(s: &mut Sides, side: usize, i: usize) {
+        if i < s[side].len() {
+            s[side].remove(i);
+        }
+    }
+
+    /// At the end of a side, if it isn't on the bar already.
+    pub fn add(s: &mut Sides, side: usize, id: &str) {
+        if !s.iter().flatten().any(|x| x == id) {
+            s[side].push(id.to_string());
+        }
+    }
+
+    /// A drag from one row onto another: the dragged button takes the place of the one it's
+    /// dropped on (so after it, moving down a side, and before it otherwise). Without a row, it
+    /// goes to the end of that side.
+    pub fn drop(s: &mut Sides, from: (usize, usize), to: (usize, Option<usize>)) {
+        let (fs, fi) = from;
+        if fi >= s[fs].len() {
+            return;
+        }
+        let id = s[fs].remove(fi);
+        let (ts, ti) = to;
+        let at = ti.unwrap_or(usize::MAX).min(s[ts].len());
+        s[ts].insert(at, id);
+    }
+}
+
 struct Editor {
     shell: Weak<Shell>,
     page: adw::PreferencesPage,
     groups: RefCell<Vec<adw::PreferencesGroup>>,
-    /// Left and right, as command ids, left to right.
-    sides: RefCell<[Vec<String>; 2]>,
+    sides: RefCell<Sides>,
+}
+
+/// What a drag carries: the side and the place of the row it started from.
+fn drag_payload(side: usize, i: usize) -> String {
+    format!("tinta-header:{side}:{i}")
+}
+
+fn parse_payload(s: &str) -> Option<(usize, usize)> {
+    let rest = s.strip_prefix("tinta-header:")?;
+    let (a, b) = rest.split_once(':')?;
+    Some((a.parse().ok()?, b.parse().ok()?))
 }
 
 impl Editor {
@@ -207,12 +271,26 @@ impl Editor {
         if let Some(s) = self.shell.upgrade() {
             s.dispatch(Message::Setting(SettingMsg::HeaderBar(start, end)));
         }
-        self.rebuild();
+        // Not now: this may run inside a handler of a widget that the rebuild takes away.
+        let e = self.clone();
+        glib::idle_add_local_once(move || e.rebuild());
     }
 
-    fn edit(self: &Rc<Self>, f: impl FnOnce(&mut [Vec<String>; 2])) {
+    fn edit(self: &Rc<Self>, f: impl FnOnce(&mut Sides)) {
         f(&mut self.sides.borrow_mut());
         self.changed();
+    }
+
+    /// Takes drops of rows: onto a row, or onto a side's title, for its end.
+    fn drop_target(self: &Rc<Self>, side: usize, at: Option<usize>) -> gtk::DropTarget {
+        let t = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
+        let e = self.clone();
+        t.connect_drop(move |_, value, _, _| {
+            let Some(from) = value.get::<String>().ok().as_deref().and_then(parse_payload) else { return false };
+            e.edit(|s| edit::drop(s, from, (side, at)));
+            true
+        });
+        t
     }
 
     fn rebuild(self: &Rc<Self>) {
@@ -225,6 +303,7 @@ impl Editor {
         for (side, (title, desc)) in titles.into_iter().enumerate() {
             let g = adw::PreferencesGroup::builder().title(title).description(desc).build();
             g.set_header_suffix(Some(&self.add_button(side, &sides)));
+            g.add_controller(self.drop_target(side, None));
             let list = &sides[side];
             if list.is_empty() {
                 let r = adw::ActionRow::builder().title(tr("No buttons")).build();
@@ -246,11 +325,29 @@ impl Editor {
         if let Some(keys) = self.shell.upgrade().and_then(|s| s.app.try_borrow().ok().and_then(|a| a.keymap.label(c).map(str::to_string))) {
             r.set_subtitle(&keys);
         }
-        let icon = gtk::Image::from_icon_name(icon_for(c).unwrap_or("text-x-generic-symbolic"));
-        r.add_prefix(&icon);
+        let handle = gtk::Image::from_icon_name("list-drag-handle-symbolic");
+        handle.add_css_class("dim-label");
+        handle.set_tooltip_text(Some(tr("Drag to Move")));
+        // add_prefix puts each one before the last: the handle comes out first.
+        r.add_prefix(&gtk::Image::from_icon_name(icon_for(c).unwrap_or("text-x-generic-symbolic")));
+        r.add_prefix(&handle);
+
+        // The whole row drags, and takes drops.
+        let drag = gtk::DragSource::new();
+        drag.set_actions(gtk::gdk::DragAction::MOVE);
+        drag.set_content(Some(&gtk::gdk::ContentProvider::for_value(&drag_payload(side, i).to_value())));
+        let row = r.clone();
+        drag.connect_drag_begin(move |src, _| {
+            src.set_icon(Some(&gtk::WidgetPaintable::new(Some(&row))), 20, 20);
+        });
+        r.add_controller(drag);
+        r.add_controller(self.drop_target(side, Some(i)));
+
         let tool = |icon: &str, tip: &str, sensitive: bool| {
             let b = gtk::Button::builder().icon_name(icon).tooltip_text(tip).valign(gtk::Align::Center).sensitive(sensitive).build();
             b.add_css_class("flat");
+            // A name for screen readers (and the tests), which the icon alone doesn't give.
+            b.update_property(&[gtk::accessible::Property::Label(&format!("{tip}: {}", title_of(c)))]);
             r.add_suffix(&b);
             b
         };
@@ -263,28 +360,18 @@ impl Editor {
         );
         let remove = tool("user-trash-symbolic", tr("Remove"), true);
         let e = self.clone();
-        up.connect_clicked(move |_| e.edit(|s| s[side].swap(i, i - 1)));
+        up.connect_clicked(move |_| e.edit(|s| edit::shift(s, side, i, -1)));
         let e = self.clone();
-        down.connect_clicked(move |_| e.edit(|s| s[side].swap(i, i + 1)));
+        down.connect_clicked(move |_| e.edit(|s| edit::shift(s, side, i, 1)));
         let e = self.clone();
-        across.connect_clicked(move |_| {
-            e.edit(|s| {
-                let id = s[side].remove(i);
-                // Toward the middle of the bar: the end of the left side, the start of the right.
-                if side == 0 { s[1].insert(0, id) } else { s[0].push(id) }
-            })
-        });
+        across.connect_clicked(move |_| e.edit(|s| edit::across(s, side, i)));
         let e = self.clone();
-        remove.connect_clicked(move |_| {
-            e.edit(|s| {
-                s[side].remove(i);
-            })
-        });
+        remove.connect_clicked(move |_| e.edit(|s| edit::remove(s, side, i)));
         r
     }
 
     /// "+" with a searchable list of the commands not on the bar yet.
-    fn add_button(self: &Rc<Self>, side: usize, sides: &[Vec<String>; 2]) -> gtk::MenuButton {
+    fn add_button(self: &Rc<Self>, side: usize, sides: &Sides) -> gtk::MenuButton {
         let search = gtk::SearchEntry::builder().placeholder_text(tr("Search commands")).build();
         let list = gtk::ListBox::new();
         list.add_css_class("navigation-sidebar");
@@ -316,7 +403,9 @@ impl Editor {
         body.append(&search);
         body.append(&scroll);
         let pop = gtk::Popover::builder().child(&body).build();
-        let btn = gtk::MenuButton::builder().icon_name("list-add-symbolic").tooltip_text(tr("Add Button")).popover(&pop).valign(gtk::Align::Center).build();
+        let tip = if side == 0 { tr("Add Button on the Left") } else { tr("Add Button on the Right") };
+        let btn = gtk::MenuButton::builder().icon_name("list-add-symbolic").tooltip_text(tip).popover(&pop).valign(gtk::Align::Center).build();
+        btn.update_property(&[gtk::accessible::Property::Label(tip)]);
         btn.add_css_class("flat");
 
         let (filter_ids, s) = (ids.clone(), search.clone());
@@ -349,8 +438,76 @@ impl Editor {
             let Some((c, _)) = ids.get(row.index() as usize) else { return };
             let id = c.id().to_string();
             p.popdown();
-            e.edit(|s| s[side].push(id));
+            e.edit(|s| edit::add(s, side, &id));
         });
         btn
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::edit;
+    use super::Sides;
+
+    fn sides(l: &[&str], r: &[&str]) -> Sides {
+        [l.iter().map(|s| s.to_string()).collect(), r.iter().map(|s| s.to_string()).collect()]
+    }
+
+    #[test]
+    fn arrows_move_within_a_side_and_stop_at_the_ends() {
+        let mut s = sides(&[], &["a", "b", "c"]);
+        edit::shift(&mut s, 1, 0, 1);
+        assert_eq!(s, sides(&[], &["b", "a", "c"]));
+        edit::shift(&mut s, 1, 2, -1);
+        assert_eq!(s, sides(&[], &["b", "c", "a"]));
+        edit::shift(&mut s, 1, 0, -1);
+        edit::shift(&mut s, 1, 2, 1);
+        assert_eq!(s, sides(&[], &["b", "c", "a"]), "past either end, nothing moves");
+    }
+
+    #[test]
+    fn across_goes_toward_the_middle_of_the_bar() {
+        let mut s = sides(&["x"], &["a", "b"]);
+        edit::across(&mut s, 0, 0);
+        assert_eq!(s, sides(&[], &["x", "a", "b"]));
+        edit::across(&mut s, 1, 2);
+        assert_eq!(s, sides(&["b"], &["x", "a"]));
+    }
+
+    #[test]
+    fn remove_and_add_without_duplicates() {
+        let mut s = sides(&["x"], &["a"]);
+        edit::remove(&mut s, 0, 0);
+        edit::remove(&mut s, 0, 5);
+        assert_eq!(s, sides(&[], &["a"]));
+        edit::add(&mut s, 0, "a");
+        assert_eq!(s, sides(&[], &["a"]), "already on the bar");
+        edit::add(&mut s, 0, "y");
+        assert_eq!(s, sides(&["y"], &["a"]));
+    }
+
+    #[test]
+    fn a_drop_takes_the_place_of_the_row_under_it() {
+        // Down a side: after the row dropped on.
+        let mut s = sides(&[], &["a", "b", "c", "d"]);
+        edit::drop(&mut s, (1, 0), (1, Some(2)));
+        assert_eq!(s, sides(&[], &["b", "c", "a", "d"]));
+        // Up a side: before it.
+        edit::drop(&mut s, (1, 3), (1, Some(0)));
+        assert_eq!(s, sides(&[], &["d", "b", "c", "a"]));
+        // To the other side, onto a row, and onto the title (the end).
+        edit::drop(&mut s, (1, 1), (0, Some(0)));
+        assert_eq!(s, sides(&["b"], &["d", "c", "a"]));
+        edit::drop(&mut s, (1, 0), (0, None));
+        assert_eq!(s, sides(&["b", "d"], &["c", "a"]));
+        // Onto itself: stays.
+        edit::drop(&mut s, (0, 1), (0, Some(1)));
+        assert_eq!(s, sides(&["b", "d"], &["c", "a"]));
+    }
+
+    #[test]
+    fn drag_payloads_round_trip_and_reject_strangers() {
+        assert_eq!(super::parse_payload(&super::drag_payload(1, 7)), Some((1, 7)));
+        assert_eq!(super::parse_payload("some text"), None);
     }
 }

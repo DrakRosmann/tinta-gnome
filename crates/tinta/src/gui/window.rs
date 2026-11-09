@@ -429,7 +429,8 @@ impl Window {
 
     /// A picture of the window as it's drawn, header bar included, for the test scripts.
     pub fn screenshot(&self, path: &Path) {
-        let Some(content) = self.window.content() else { return };
+        // The window's child holds the content and, above it, any dialog that's open.
+        let Some(content) = self.window.child().or_else(|| self.window.content()) else { return };
         let w = content.width();
         let h = content.height();
         let paintable = gtk::WidgetPaintable::new(Some(&content));
