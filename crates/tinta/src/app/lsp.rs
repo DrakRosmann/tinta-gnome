@@ -489,7 +489,7 @@ impl App {
                 let (line, col) = e.doc.line_col(anchor);
                 let rope = e.doc.rope.clone();
                 e.doc.highlighter.as_mut().is_some_and(|h| {
-                    h.advance(&rope, std::time::Duration::from_millis(3));
+                    h.advance_through(&rope, line, std::time::Duration::from_millis(3));
                     h.is_noncode(line, col)
                 })
             }
@@ -649,7 +649,8 @@ impl App {
         let text = text.to_string();
         self.edit(|d, c, _| {
             let e = c.head();
-            d.apply(vec![tinta_core::Edit::new(start, e, text)], c, tinta_core::EditKind::Other, |m, c| {
+            // The caret may have gone back past where the word began: then nothing is replaced.
+            d.apply(vec![tinta_core::Edit::new(start.min(e), e, text)], c, tinta_core::EditKind::Other, |m, c| {
                 c.set_single(Selection::cursor(m.after_edit(0)));
             });
         });
@@ -681,16 +682,18 @@ impl App {
         };
         let parsed = reindent_stops(&parsed, &indent, &unit);
         let text = parsed.text.clone();
-        let mut base = 0;
+        let mut base = None;
         self.edit(|d, c, _| {
             let p = c.primary();
-            let a = start.unwrap_or(p.start());
             let b = p.end();
+            let a = start.unwrap_or(p.start()).min(b);
             d.apply(vec![tinta_core::Edit::new(a, b, text)], c, tinta_core::EditKind::Other, |m, c| {
-                base = m.before_edit(0);
+                base = Some(m.before_edit(0));
                 c.set_single(Selection::cursor(m.after_edit(0)));
             });
         });
+        // Read-only text: nothing went in, so there are no stops to go to.
+        let Some(base) = base else { return };
         let session = snippet::Session::new(&parsed, base);
         if let Some((t, _)) = self.active_mut() {
             match session {

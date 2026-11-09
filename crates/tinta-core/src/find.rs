@@ -33,16 +33,21 @@ impl Query {
 /// All matches as char ranges. Stops at `limit` so a one-letter query stays responsive.
 pub fn find_all(doc: &Document, re: &Regex, limit: usize) -> Vec<(usize, usize)> {
     let text = doc.rope.to_string();
-    find_in_str(&text, doc, re, limit)
+    find_in_str(&text, re, limit)
 }
 
-fn find_in_str(text: &str, doc: &Document, re: &Regex, limit: usize) -> Vec<(usize, usize)> {
+fn find_in_str(text: &str, re: &Regex, limit: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
+    // Matches come in order: chars are counted on from the last one instead of looked up.
+    let (mut byte, mut ch) = (0usize, 0usize);
     for m in re.find_iter(text) {
         if m.start() == m.end() {
             continue;
         }
-        out.push((doc.rope.byte_to_char(m.start()), doc.rope.byte_to_char(m.end())));
+        let start = ch + text[byte..m.start()].chars().count();
+        let end = start + text[m.start()..m.end()].chars().count();
+        (byte, ch) = (m.end(), end);
+        out.push((start, end));
         if out.len() >= limit {
             break;
         }

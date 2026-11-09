@@ -747,6 +747,92 @@ fn every_command_runs_without_panicking_in_every_state() {
     assert!(Path::new(&dir).exists());
 }
 
+/// Commands, keys and clicks one after another in a random order, each starting from whatever
+/// the last one left: popups open, several cursors, splits, folds. Nothing may panic, and every
+/// caret stays inside its text.
+#[test]
+fn random_sessions_never_panic_or_lose_the_caret() {
+    let dir = temp_dir("random");
+    std::fs::write(dir.join("a.rs"), SOURCE).unwrap();
+    std::fs::write(dir.join("b.md"), "# t\n\ntexto [link](x)\n\n- a\n- b\n").unwrap();
+    std::fs::write(dir.join("c.py"), "def f(x):\n    return [x, {'a': (1, 2)}]\n").unwrap();
+    let skip = |c: Command| {
+        matches!(
+            c,
+            Command::Quit
+                | Command::NewTerminal
+                | Command::ToggleTerminal
+                | Command::TogglePanel
+                | Command::OpenFolderInFiles
+                | Command::CloseFolder
+        )
+    };
+    let commands: Vec<Command> = Command::ALL.iter().copied().filter(|c| !skip(*c)).collect();
+    let keys = ["left", "right", "up", "down", "home", "end", "pageup", "pagedown", "backspace", "delete", "enter", "tab", "escape"];
+    let mut ui = Ui::new(vec![dir.join("a.rs")]);
+    // TINTA_FUZZ_SEED and TINTA_FUZZ_STEPS run it longer, or another way.
+    let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
+    let steps = env("TINTA_FUZZ_STEPS").unwrap_or(1500);
+    let mut seed = env("TINTA_FUZZ_SEED").map_or(0x2545_F491_4F6C_DD1D, |s| s.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    let mut rnd = |n: usize| {
+        seed ^= seed >> 12;
+        seed ^= seed << 25;
+        seed ^= seed >> 27;
+        (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 33) as usize % n.max(1)
+    };
+    let mut recent: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    for step in 0..steps {
+        let what = rnd(10);
+        let label = match what {
+            0..=2 => {
+                let c = commands[rnd(commands.len())];
+                ui.cmd(c);
+                c.id().to_string()
+            }
+            3..=5 => {
+                let text = ["a", "{", "(", "\"", "x", " ", "ção", "日", "\n"][rnd(9)];
+                ui.typed(text);
+                format!("type {text:?}")
+            }
+            6 | 7 => {
+                let k = keys[rnd(keys.len())];
+                let mods = [Modifiers::empty(), Modifiers::SHIFT, Modifiers::CTRL, Modifiers::ALT][rnd(4)];
+                ui.key(k, mods, None);
+                format!("key {k} {mods:?}")
+            }
+            8 => {
+                let p = Point::new(rnd(SIZE.width as usize) as f32, rnd(SIZE.height as usize) as f32);
+                ui.click_at(p);
+                format!("click {p:?}")
+            }
+            _ => {
+                let f = ["a.rs", "b.md", "c.py"][rnd(3)];
+                let _ = ui.app.open_path(&dir.join(f));
+                ui.frame();
+                format!("open {f}")
+            }
+        };
+        recent.push_back(label.clone());
+        if recent.len() > 12 {
+            recent.pop_front();
+        }
+        // Popups and dialogs sometimes stay open, sometimes get closed, as a person would.
+        if rnd(3) == 0 {
+            ui.app.palette = None;
+            ui.app.dialog = None;
+            ui.app.focus = Focus::Editor;
+        }
+        for t in ui.app.tabs.values() {
+            let Some(e) = ui.app.docs.get(&t.doc) else { continue };
+            let n = e.doc.len_chars();
+            for s in t.cursors.iter() {
+                assert!(s.anchor <= n && s.head <= n, "step {step}: {s:?} past {n} in {:?}, after {recent:?}", e.doc.path);
+            }
+            assert!(t.scroll_y >= 0.0 && t.scroll_x >= 0.0, "step {step} ({label})");
+        }
+    }
+}
+
 #[test]
 fn split_views_of_one_document_stay_in_step() {
     let (mut ui, _) = Ui::with_file();
@@ -803,6 +889,58 @@ fn find_highlights_and_replace_all_works() {
     assert_eq!(ui.app.active().unwrap().1.matches.len(), 0);
     ui.cmd(Command::Undo);
     assert_eq!(ui.text(), SOURCE);
+}
+
+/// In a big file the highlighted matches follow the typing at once and are looked for again
+/// when it pauses; in a small one, straight away.
+#[test]
+fn find_matches_follow_typing_and_catch_up_after_a_pause() {
+    let dir = temp_dir("bigfind");
+    let p = dir.join("big.txt");
+    let mut src = String::new();
+    for i in 0..40_000 {
+        src.push_str(&format!("line {i} alpha beta gamma\n"));
+    }
+    assert!(src.len() > 1_000_000);
+    std::fs::write(&p, &src).unwrap();
+    let mut ui = Ui::new(vec![p]);
+    ui.cmd(Command::Find);
+    let _ = ui.app.update(Message::Find(crate::app::FindMsg::Query("alpha".into())));
+    ui.frame();
+    assert_eq!(ui.app.active().unwrap().1.matches.len(), 40_000);
+    ui.app.focus = Focus::Editor;
+    ui.app.jump_to(20_000, 0);
+    ui.frame();
+    let check = |ui: &Ui| {
+        let (_, e) = ui.app.active().unwrap();
+        for &(a, b) in &e.matches {
+            assert_eq!(e.doc.slice_string(a, b), "alpha");
+        }
+        e.matches.len()
+    };
+    // Typing before a match moves it and every one after it.
+    ui.typed("xy");
+    assert_eq!(check(&ui), 40_000);
+    // Typing into one drops it for now...
+    ui.app.jump_to(20_000, 15);
+    ui.typed("Q");
+    assert!(ui.text().lines().nth(20_000).unwrap().contains("alQpha"));
+    assert_eq!(check(&ui), 39_999);
+    // ...and a new one shows up once the typing stops.
+    ui.key("backspace", Modifiers::empty(), None);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    ui.msg(Message::TickFrame);
+    assert_eq!(check(&ui), 40_000);
+    // A small file never waits.
+    drop(ui);
+    let (mut ui, _) = Ui::with_file();
+    ui.cmd(Command::Find);
+    let _ = ui.app.update(Message::Find(crate::app::FindMsg::Query("alpha".into())));
+    ui.frame();
+    ui.app.focus = Focus::Editor;
+    ui.app.jump_to(0, 0);
+    ui.typed("alpha ");
+    assert_eq!(ui.app.active().unwrap().1.matches.len(), 3);
 }
 
 /// More matches than get highlighted: all of them still change.
@@ -1512,6 +1650,13 @@ fn a_build_task_runs_and_its_errors_mark_the_file() {
     assert_eq!(ui.app.tasks.exit, Some(Ok(())));
     assert!(ui.app.active().unwrap().1.diags.is_empty());
     assert!(ui.app.tasks.lines.iter().any(|l| l.text == "ok"));
+    // An error on a line the file no longer has (it was cut since) marks the end, not a crash.
+    std::fs::write(dir.join("Makefile"), "all:\n\t@echo 'a.c:40:3: error: longe' >&2; exit 3\n").unwrap();
+    ui.cmd(Command::RerunTask);
+    wait_for(&mut ui, |a| a.tasks.running.is_none() && a.tasks.exit.is_some());
+    let (_, e) = ui.app.active().unwrap();
+    assert_eq!(e.diags.len(), 1);
+    assert!(e.diags[0].start <= e.doc.len_chars() && e.diags[0].end <= e.doc.len_chars());
 }
 
 #[test]

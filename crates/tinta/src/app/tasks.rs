@@ -215,9 +215,10 @@ impl App {
     fn attach_problem(&mut self, path: &Path, p: &Problem) {
         let Some(id) = self.doc_by_path(path) else { return };
         let Some(e) = self.docs.get_mut(&id) else { return };
+        // The file may have changed since it was built: the line can be gone.
         let start = e.doc.pos(p.location.line, p.location.col);
         let (a, b) = tinta_core::commands::word_at(&e.doc, start);
-        let end = if a == b { (start + 1).min(e.doc.line_end(p.location.line)) } else { b };
+        let end = if a == b { (start + 1).min(e.doc.line_end(e.doc.char_to_line(start))) } else { b };
         e.diags.push(Diag {
             start: if a == b { start } else { a },
             end,

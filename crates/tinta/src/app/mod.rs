@@ -621,7 +621,7 @@ impl App {
                 Task::none()
             }
             Message::TabClose(g, e) => {
-                let Some(id) = self.groups.get(g).and_then(|gr| gr.model.data::<TabId>(e).copied()) else {
+                let Some(id) = self.groups.get(g).and_then(|gr| gr.model.data(e).copied()) else {
                     return Task::none();
                 };
                 self.request_close_tab(id)
@@ -667,6 +667,7 @@ impl App {
             }
             Message::TickFrame => {
                 self.advance_highlighting(Duration::from_millis(5));
+                self.refresh_find_matches_lazily();
                 Task::none()
             }
             Message::TickSlow => self.tick_slow(),

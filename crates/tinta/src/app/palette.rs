@@ -325,8 +325,11 @@ impl App {
         if cancelled {
             if matches!(p.mode, PaletteMode::Line | PaletteMode::Symbols)
                 && let Some((c, y)) = p.restore
-                && let Some((t, _)) = self.active_mut()
+                && let Some((t, e)) = self.active_mut()
             {
+                // The text may have changed while the palette was open.
+                let mut c = c;
+                c.clamp(e.doc.len_chars());
                 t.cursors = c;
                 t.scroll_y = y;
                 self.after_caret_move();

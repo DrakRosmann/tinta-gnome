@@ -47,6 +47,15 @@ enum CharClass {
 }
 
 fn class(c: char) -> CharClass {
+    // Nearly all text is ASCII: answered without the Unicode tables.
+    if c.is_ascii() {
+        return match c {
+            '\n' => CharClass::Newline,
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => CharClass::Word,
+            ' ' | '\t' | '\r' | '\x0b' | '\x0c' => CharClass::Space,
+            _ => CharClass::Punct,
+        };
+    }
     if c == '\n' {
         CharClass::Newline
     } else if c.is_whitespace() {
@@ -59,7 +68,10 @@ fn class(c: char) -> CharClass {
 }
 
 pub fn is_word_char(c: char) -> bool {
-    class(c) == CharClass::Word
+    if c.is_ascii() {
+        return c.is_ascii_alphanumeric() || c == '_';
+    }
+    c.is_alphanumeric()
 }
 
 pub fn word_left(doc: &Document, mut pos: usize) -> usize {
@@ -980,6 +992,7 @@ pub fn transpose(doc: &mut Document, cur: &mut Cursors) {
 
 pub fn word_at(doc: &Document, pos: usize) -> (usize, usize) {
     let n = doc.len_chars();
+    let pos = pos.min(n);
     let probe = if pos < n && is_word_char(doc.rope.char(pos)) {
         pos
     } else if pos > 0 && is_word_char(doc.rope.char(pos - 1)) {
@@ -1359,53 +1372,91 @@ pub fn cut(doc: &mut Document, cur: &mut Cursors) -> (Vec<String>, bool) {
 
 /// Words in the document starting with `prefix`, nearest to the cursor first.
 pub fn words_with_prefix(doc: &Document, prefix: &str, cursor: usize, limit: usize) -> Vec<String> {
-    let mut seen = std::collections::HashMap::<String, usize>::new();
     if prefix.is_empty() {
         return Vec::new();
     }
-    let lower = prefix.to_lowercase();
+    // Compared a char at a time while scanning: a word is only built once it has the prefix, so
+    // the scan allocates for the few candidates and not for every word around the cursor.
+    let lower: Vec<char> = prefix.chars().flat_map(char::to_lowercase).collect();
+    let prefix_len = prefix.len();
+    let mut seen = std::collections::HashMap::<String, usize>::new();
     let mut word = String::new();
     let mut start = 0;
+    let mut in_word = false;
+    // How many of the prefix's lowercase chars the current word has matched; None once it can't.
+    let mut matched: Option<usize> = Some(0);
     // Only around the cursor: that's where the useful words are, and it keeps huge files fast.
     const WINDOW: usize = 300_000;
     let from = cursor.saturating_sub(WINDOW);
     let to = (cursor + WINDOW).min(doc.len_chars());
-    for (i, c) in doc.rope.chars_at(from).take(to - from).enumerate() {
-        let i = i + from;
-        if is_word_char(c) {
-            if word.is_empty() {
-                start = i;
+    let mut finish = |word: &mut String, start: usize, end: usize, matched: Option<usize>| {
+        if matched == Some(lower.len()) {
+            // The word being typed right now doesn't complete itself.
+            let is_current = start <= cursor && cursor <= end;
+            if !is_current && word.len() > prefix_len {
+                let d = start.abs_diff(cursor);
+                match seen.get_mut(word.as_str()) {
+                    Some(x) => *x = (*x).min(d),
+                    None => {
+                        seen.insert(word.clone(), d);
+                    }
+                }
             }
-            word.push(c);
-        } else if !word.is_empty() {
-            consider(&mut seen, &mut word, &lower, prefix, start, i, cursor);
+        }
+        word.clear();
+    };
+    let mut i = from;
+    let (chunks, chunk_byte, _, _) = doc.rope.chunks_at_char(from);
+    let mut skip = doc.rope.char_to_byte(from) - chunk_byte;
+    'outer: for chunk in chunks {
+        let piece = &chunk[skip..];
+        skip = 0;
+        for c in piece.chars() {
+            if i >= to {
+                break 'outer;
+            }
+            if is_word_char(c) {
+                if !in_word {
+                    in_word = true;
+                    start = i;
+                    matched = Some(0);
+                }
+                if let Some(k) = matched {
+                    if k < lower.len() {
+                        let mut lc = c.to_lowercase();
+                        let mut k = k;
+                        let mut ok = true;
+                        for l in lc.by_ref() {
+                            if k == lower.len() {
+                                break;
+                            }
+                            if lower[k] == l {
+                                k += 1;
+                            } else {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        matched = ok.then_some(k);
+                    }
+                    if matched.is_some() {
+                        word.push(c);
+                    }
+                }
+            } else if in_word {
+                in_word = false;
+                finish(&mut word, start, i, matched);
+            }
+            i += 1;
         }
     }
-    if !word.is_empty() {
-        consider(&mut seen, &mut word, &lower, prefix, start, to, cursor);
+    if in_word {
+        finish(&mut word, start, i.min(to), matched);
     }
     let mut v: Vec<(String, usize)> = seen.into_iter().collect();
-    v.sort_by_key(|(w, d)| (*d, w.clone()));
+    v.sort_unstable_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
     v.truncate(limit);
     v.into_iter().map(|(w, _)| w).collect()
-}
-
-fn consider(
-    seen: &mut std::collections::HashMap<String, usize>,
-    word: &mut String,
-    lower: &str,
-    prefix: &str,
-    start: usize,
-    end: usize,
-    cursor: usize,
-) {
-    let w = std::mem::take(word);
-    // The word being typed right now doesn't complete itself.
-    let is_current = start <= cursor && cursor <= end;
-    if !is_current && w.len() > prefix.len() && w.to_lowercase().starts_with(lower) {
-        let d = start.abs_diff(cursor);
-        seen.entry(w).and_modify(|x| *x = (*x).min(d)).or_insert(d);
-    }
 }
 
 #[cfg(test)]
@@ -1774,4 +1825,60 @@ mod tests {
         backspace(&mut d, &mut c, EditOpts::default());
         assert_eq!(show(&d, &c), "ação|");
     }
+
+    /// The scan compares as it goes; it must find what lowercasing every word would.
+    #[test]
+    fn words_with_prefix_matches_the_plain_way() {
+        fn plain(text: &str, prefix: &str, cursor: usize) -> Vec<String> {
+            let lower = prefix.to_lowercase();
+            let chars: Vec<char> = text.chars().collect();
+            let mut seen = std::collections::HashMap::<String, usize>::new();
+            let mut i = 0;
+            while i < chars.len() {
+                if !is_word_char(chars[i]) {
+                    i += 1;
+                    continue;
+                }
+                let start = i;
+                while i < chars.len() && is_word_char(chars[i]) {
+                    i += 1;
+                }
+                let w: String = chars[start..i].iter().collect();
+                let current = start <= cursor && cursor <= i;
+                if !current && w.len() > prefix.len() && w.to_lowercase().starts_with(&lower) {
+                    let d = start.abs_diff(cursor);
+                    seen.entry(w).and_modify(|x| *x = (*x).min(d)).or_insert(d);
+                }
+            }
+            let mut v: Vec<(String, usize)> = seen.into_iter().collect();
+            v.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+            v.into_iter().map(|(w, _)| w).collect()
+        }
+        let text = "Ação acaso ACENO açúcar a_b ab9 Ab ábaco\nfn Fooo foo_bar FOOD fo\tfoé fooo\nİstanbul istmo ß straße\n";
+        let (d, _) = setup(text);
+        let n = d.len_chars();
+        for prefix in ["a", "A", "ac", "Aç", "fo", "FOO", "i", "İ", "st", "x", "ab"] {
+            for cursor in [0, 3, 10, n / 2, n] {
+                assert_eq!(words_with_prefix(&d, prefix, cursor, 100), plain(text, prefix, cursor), "{prefix:?} at {cursor}");
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_and_unicode_classes_agree() {
+        for c in (0u32..0x3000).filter_map(char::from_u32) {
+            let slow = if c == '\n' {
+                CharClass::Newline
+            } else if c.is_whitespace() {
+                CharClass::Space
+            } else if c.is_alphanumeric() || c == '_' {
+                CharClass::Word
+            } else {
+                CharClass::Punct
+            };
+            assert!(class(c) == slow, "{c:?}");
+            assert_eq!(is_word_char(c), slow == CharClass::Word, "{c:?}");
+        }
+    }
 }
+

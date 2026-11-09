@@ -70,6 +70,16 @@ pub struct Structure {
     symbols: Vec<Symbol>,
     language: String,
     parsed_rev: Option<u64>,
+    /// Rows touched by edits since the last parse, in today's rows, and how many lines they
+    /// added overall: what lets a reparse look again at only that part.
+    pending: Option<Pending>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    lo: usize,
+    hi: usize,
+    delta: isize,
 }
 
 impl std::fmt::Debug for Structure {
@@ -83,13 +93,29 @@ impl Structure {
         let g = grammar(language)?;
         let mut parser = Parser::new();
         parser.set_language(&g).ok()?;
-        Some(Self { parser, tree: None, folds: BTreeMap::new(), symbols: Vec::new(), language: language.to_string(), parsed_rev: None })
+        Some(Self { parser, tree: None, folds: BTreeMap::new(), symbols: Vec::new(), language: language.to_string(), parsed_rev: None, pending: None })
     }
 
     pub fn edit(&mut self, e: InputEdit) {
         if let Some(t) = &mut self.tree {
             t.edit(&e);
         }
+        let (start, old_end, new_end) = (e.start_position.row, e.old_end_position.row, e.new_end_position.row);
+        let delta = new_end as isize - old_end as isize;
+        // Earlier dirty rows move with this edit like any other text.
+        let map = |r: usize| {
+            if r >= old_end {
+                (r as isize + delta) as usize
+            } else if r > start {
+                new_end
+            } else {
+                r
+            }
+        };
+        self.pending = Some(match self.pending {
+            None => Pending { lo: start, hi: new_end, delta },
+            Some(p) => Pending { lo: p.lo.min(start), hi: map(p.hi).max(new_end), delta: p.delta + delta },
+        });
     }
 
     pub fn has_tree(&self) -> bool {
@@ -112,44 +138,130 @@ impl Structure {
             let (chunk, start, _, _) = rope.chunk_at_byte(byte);
             &chunk.as_bytes()[byte - start..]
         };
-        let tree = self.parser.parse_with_options(&mut read, self.tree.as_ref(), None);
-        self.tree = tree;
+        let old = self.tree.take();
+        let tree = self.parser.parse_with_options(&mut read, old.as_ref(), None);
+        let pending = self.pending.take();
         self.parsed_rev = Some(revision);
+        let (Some(new), Some(old), Some(p)) = (tree.as_ref(), old.as_ref(), pending) else {
+            self.tree = tree;
+            self.rebuild(rope);
+            return;
+        };
+        // Only the top-level blocks the edits touched are walked again; what lies before them
+        // stays, and what lies after moves by the lines added. Walking every node of a big file
+        // on every key was most of the time a key took.
+        let (mut lo, mut hi) = (p.lo, p.hi);
+        for r in old.changed_ranges(new) {
+            lo = lo.min(r.start_point.row);
+            hi = hi.max(r.end_point.row);
+        }
+        let root = new.root_node();
+        let mut cursor = root.walk();
+        let children: Vec<Node<'_>> = root.children(&mut cursor).collect();
+        let rows = |n: &Node<'_>| (n.start_position().row, n.end_position().row);
+        let (mut a, mut b) = (lo, hi);
+        let mut first = children.partition_point(|c| rows(c).1 < a);
+        let mut last = first;
+        // Grow until no block outside shares a row with the ones inside.
+        loop {
+            let was = (a, b, first, last);
+            while last < children.len() && rows(&children[last]).0 <= b {
+                b = b.max(rows(&children[last]).1);
+                last += 1;
+            }
+            if first < last {
+                a = a.min(rows(&children[first]).0);
+            }
+            while first > 0 && rows(&children[first - 1]).1 >= a {
+                first -= 1;
+                a = a.min(rows(&children[first]).0);
+            }
+            if (a, b, first, last) == was {
+                break;
+            }
+        }
+        let old_b = b as isize - p.delta;
+        let shift = |r: usize| (r as isize + p.delta) as usize;
+        let before_fold = |h: usize| h < a;
+        let after = |r: usize| (r as isize) > old_b;
+        let folds = std::mem::take(&mut self.folds);
+        let symbols = std::mem::take(&mut self.symbols);
+        self.folds = folds.into_iter().filter_map(|(h, e)| {
+            if before_fold(h) {
+                Some((h, e))
+            } else if after(h) {
+                Some((shift(h), shift(e)))
+            } else {
+                None
+            }
+        }).collect();
+        let mut tail = Vec::new();
+        for sym in symbols {
+            if sym.line < a {
+                self.symbols.push(sym);
+            } else if after(sym.line) {
+                tail.push(Symbol { line: shift(sym.line), end: sym.end.map(shift), ..sym });
+            }
+        }
+        for child in &children[first..last] {
+            self.walk(*child, root, rope);
+        }
+        self.symbols.extend(tail);
+        drop(cursor);
+        self.tree = tree;
+    }
+
+    /// Looks at the whole tree again: what the edit-by-edit update must agree with.
+    pub fn rebuild_everything(&mut self, rope: &Rope) {
         self.rebuild(rope);
+    }
+
+    pub fn folds(&self) -> &BTreeMap<usize, usize> {
+        &self.folds
     }
 
     fn rebuild(&mut self, rope: &Rope) {
         self.folds.clear();
         self.symbols.clear();
         let Some(tree) = self.tree.take() else { return };
-        {
-            let root = tree.root_node();
-            let mut cursor = root.walk();
-            // Depth-first over named nodes, tracking how many symbols are open around each.
-            let mut depth_stack: Vec<usize> = Vec::new();
-            let mut symbol_depth = 0usize;
-            'walk: loop {
-                let node = cursor.node();
-                let is_symbol = self.visit(node, root, rope, symbol_depth);
-                if is_symbol {
-                    symbol_depth += 1;
+        let root = tree.root_node();
+        self.walk(root, root, rope);
+        self.tree = Some(tree);
+    }
+
+    /// Folds and symbols from `top` and everything under it.
+    fn walk(&mut self, top: Node<'_>, root: Node<'_>, rope: &Rope) {
+        let mut cursor = top.walk();
+        // Depth-first over named nodes, tracking how many symbols are open around each.
+        let mut depth_stack: Vec<usize> = Vec::new();
+        let mut symbol_depth = 0usize;
+        'walk: loop {
+            let node = cursor.node();
+            let is_symbol = self.visit(node, root, rope, symbol_depth);
+            if is_symbol {
+                symbol_depth += 1;
+            }
+            if cursor.goto_first_child() {
+                depth_stack.push(usize::from(is_symbol));
+                continue;
+            }
+            if is_symbol {
+                symbol_depth -= 1;
+            }
+            loop {
+                if depth_stack.is_empty() {
+                    // Back at `top`: its siblings are someone else's.
+                    break 'walk;
                 }
-                if cursor.goto_first_child() {
-                    depth_stack.push(usize::from(is_symbol));
-                    continue;
+                if cursor.goto_next_sibling() {
+                    break;
                 }
-                if is_symbol {
-                    symbol_depth -= 1;
+                if !cursor.goto_parent() {
+                    break 'walk;
                 }
-                while !cursor.goto_next_sibling() {
-                    if !cursor.goto_parent() {
-                        break 'walk;
-                    }
-                    symbol_depth -= depth_stack.pop().unwrap_or(0);
-                }
+                symbol_depth -= depth_stack.pop().unwrap_or(0);
             }
         }
-        self.tree = Some(tree);
     }
 
     fn visit(&mut self, node: Node<'_>, root: Node<'_>, rope: &Rope, depth: usize) -> bool {
@@ -457,6 +569,26 @@ mod tests {
         let each = t.elapsed() / 20;
         eprintln!("{} lines: {each:?} per edit", d.len_lines());
         assert!(each < Duration::from_millis(100), "{each:?}");
+    }
+
+    /// The size up to which the editor reparses on every key.
+    #[test]
+    #[ignore]
+    fn bench_sync_at_the_every_key_limit() {
+        let body = "    let value = compute(alpha, beta);\n".repeat(20);
+        let mut src = String::new();
+        while src.len() < 200_000 {
+            src.push_str(&format!("fn f{}() {{\n{body}}}\n", src.len()));
+        }
+        let mut d = doc("Rust", &src);
+        let mut c = Cursors::default();
+        let at = d.pos(d.len_lines() / 2, 4);
+        let t = Instant::now();
+        for i in 0..50 {
+            d.apply(vec![Edit::insert(at + i, "x")], &mut c, EditKind::Typing, |_, _| {});
+            d.sync_structure();
+        }
+        eprintln!("{} lines: {:?} per edit", d.len_lines(), t.elapsed() / 50);
     }
 
     #[test]
