@@ -60,6 +60,11 @@ pub struct Window {
     groups: RefCell<Vec<Rc<GroupView>>>,
     pub panel: Rc<Panel>,
     pub sidebar: Rc<Sidebar>,
+    activity: super::activitybar::ActivityBar,
+    /// The sidebar opening or closing beside the text, and whether that's under way: the divider's
+    /// moves then aren't the user's.
+    slide: RefCell<Option<adw::TimedAnimation>>,
+    sliding: Rc<Cell<bool>>,
     header_buttons: super::headerbar::HeaderButtons,
     status: super::status::StatusBar,
     popups: super::popups::Popups,
@@ -92,7 +97,7 @@ struct Last {
 impl Window {
     pub fn build(gapp: &adw::Application, shell: &Rc<Shell>) -> Self {
         let css = gtk::CssProvider::new();
-        css.load_from_string(CSS);
+        css.load_from_string(&format!("{CSS}{}", super::activitybar::CSS));
         gtk::style_context_add_provider_for_display(&gdk::Display::default().expect("display"), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         let window = adw::ApplicationWindow::builder().application(gapp).default_width(1280).default_height(820).title("Tinta").build();
@@ -166,9 +171,13 @@ impl Window {
 
         let status = super::status::StatusBar::build(shell);
         let vim_line = super::findbar::VimLine::build(shell);
-        let split = adw::OverlaySplitView::builder().collapsed(true).show_sidebar(false).content(&main).vexpand(true).build();
+        let split = adw::OverlaySplitView::builder().collapsed(true).show_sidebar(false).content(&main).vexpand(true).hexpand(true).build();
+        let activity = super::activitybar::ActivityBar::build(shell);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        row.append(&activity.root);
+        row.append(&split);
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        content.append(&split);
+        content.append(&row);
         content.append(&vim_line.root);
 
         // Too narrow for the sidebar beside the text: it moves over it, and back when there's room.
@@ -240,6 +249,9 @@ impl Window {
             groups: RefCell::new(Vec::new()),
             panel,
             sidebar,
+            activity,
+            slide: RefCell::new(None),
+            sliding: Rc::new(Cell::new(false)),
             header_buttons,
             status,
             popups: super::popups::Popups::default(),
@@ -362,8 +374,10 @@ impl Window {
         });
         self.window.add_controller(drop);
         let s = Rc::downgrade(shell);
+        let sliding = self.sliding.clone();
         self.main.connect_position_notify(move |p| {
             if let Some(s) = s.upgrade()
+                && !sliding.get()
                 && let Ok(mut a) = s.app.try_borrow_mut()
                 && p.position() > 50
                 && p.start_child().is_some()
@@ -503,11 +517,18 @@ impl Window {
                 self.sidebar.root.set_visible(true);
                 self.split.set_show_sidebar(sidebar.is_some());
             } else {
-                self.sidebar.root.set_visible(sidebar.is_some());
+                let was_open = last.sidebar.is_some_and(|(v, narrow)| v.is_some() && !narrow);
+                if was_open != sidebar.is_some() && last.sidebar.is_some() {
+                    self.slide_sidebar(sidebar.is_some(), app.sidebar_w as i32);
+                } else {
+                    self.sidebar.root.set_visible(sidebar.is_some());
+                }
             }
             last.sidebar = Some((sidebar, app.narrow));
         }
-        if sidebar.is_some() && !app.narrow && (app.sidebar_w as i32 - last.sidebar_w).abs() > 2 && (app.sidebar_w as i32 - self.main.position()).abs() > 2 {
+        self.activity.root.set_visible(!app.zen);
+        self.activity.sync(&app);
+        if sidebar.is_some() && !app.narrow && !self.sliding.get() && (app.sidebar_w as i32 - last.sidebar_w).abs() > 2 && (app.sidebar_w as i32 - self.main.position()).abs() > 2 {
             self.main.set_position(app.sidebar_w as i32);
             last.sidebar_w = app.sidebar_w as i32;
         }
@@ -704,6 +725,50 @@ fn home_relative(p: &Path) -> String {
 }
 
 /// A message sent once the current event is over, from signals that may fire mid-update.
+impl Window {
+    /// Opens or closes the sidebar beside the text by moving the divider, to `width` or from
+    /// where it is to the edge. Without animations (or before the window shows) it just appears.
+    fn slide_sidebar(&self, open: bool, width: i32) {
+        if let Some(a) = self.slide.take() {
+            a.skip();
+        }
+        let (main, root) = (self.main.clone(), self.sidebar.root.clone());
+        if !self.window.is_mapped() {
+            root.set_visible(open);
+            return;
+        }
+        let from = if open { 0 } else { main.position() };
+        let to = if open { width.max(180) } else { 0 };
+        self.sliding.set(true);
+        main.set_shrink_start_child(true);
+        root.set_visible(true);
+        main.set_position(from);
+        let target = adw::PropertyAnimationTarget::new(&main, "position");
+        let anim = adw::TimedAnimation::builder()
+            .widget(&main)
+            .value_from(from as f64)
+            .value_to(to as f64)
+            .duration(160)
+            .easing(adw::Easing::EaseOutCubic)
+            .target(&target)
+            .build();
+        let sliding = self.sliding.clone();
+        anim.connect_done(move |_| {
+            main.set_shrink_start_child(false);
+            if open {
+                main.set_position(to);
+            } else {
+                root.set_visible(false);
+                // Where it opens again without sliding (the window hidden, a narrow spell between).
+                main.set_position(from);
+            }
+            sliding.set(false);
+        });
+        anim.play();
+        *self.slide.borrow_mut() = Some(anim);
+    }
+}
+
 fn tell(shell: &std::rc::Weak<Shell>, m: Message) {
     let s = shell.clone();
     glib::idle_add_local_once(move || {
