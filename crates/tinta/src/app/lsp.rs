@@ -128,6 +128,11 @@ impl App {
         let Some(e) = self.docs.get(&doc) else { return Task::none() };
         let Some(path) = e.doc.path.clone() else { return Task::none() };
         let Some(lang) = e.doc.language.lsp_id else { return Task::none() };
+        // Arduino sketches read as C++, but clangd can't compile one on its own: it would only
+        // mark the first line with an error about the file's extension.
+        if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("ino") || x.eq_ignore_ascii_case("pde")) {
+            return Task::none();
+        }
         let Some((cmd, args)) = core_lsp::resolve_server(lang, &self.settings.lsp_servers) else {
             // Nothing installed: say so, and how to fix it. Not when the user turned it off.
             let hint = match self.settings.lsp_servers.get(lang) {

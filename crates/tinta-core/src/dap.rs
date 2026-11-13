@@ -3,12 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,10 @@ pub enum Incoming {
     Message(Value),
     Stderr(String),
     Exited,
+    /// A line from the GDB server (OpenOCD and the like) that talks to the board.
+    Server(String),
+    /// The GDB server couldn't be started, or never got ready.
+    ServerFailed(String),
 }
 
 pub type Sink = Arc<dyn Fn(Incoming) + Send + Sync>;
@@ -91,7 +95,8 @@ pub fn shift_breakpoints(list: &mut Vec<Breakpoint>, map: impl Fn(usize) -> Opti
 #[serde(default, rename_all = "camelCase")]
 pub struct LaunchConfig {
     pub name: String,
-    /// `gdb`, `lldb`, `python` or `go`, and VS Code's names for them.
+    /// `gdb`, `lldb`, `python`, `go`, `embedded` (a board, through a GDB server) or `probe-rs`,
+    /// and VS Code's names for them (`cortex-debug`, `probe-rs-debug`).
     #[serde(rename = "type")]
     pub kind: String,
     pub program: String,
@@ -151,6 +156,8 @@ fn normalize_kind(kind: &str) -> &str {
         "lldb" | "lldb-dap" | "codelldb" => "lldb",
         "python" | "debugpy" => "python",
         "go" | "dlv" | "delve" => "go",
+        "embedded" | "cortex-debug" => "embedded",
+        "probe-rs" | "probe-rs-debug" => "probe-rs",
         other => other,
     }
 }
@@ -164,12 +171,41 @@ pub struct Adapter {
 
 /// The major version of a gdb built with Python.
 fn gdb_major() -> Option<u32> {
-    static CACHE: OnceLock<Option<u32>> = OnceLock::new();
-    *CACHE.get_or_init(|| {
-        let out = crate::host::command("gdb", ["--batch", "-ex", "python import gdb; print(gdb.VERSION)"], None, &[]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    gdb_major_of("gdb")
+}
+
+fn gdb_major_of(gdb: &str) -> Option<u32> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<u32>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(v) = cache.lock().ok().and_then(|c| c.get(gdb).copied()) {
+        return v;
+    }
+    let version = (|| {
+        let out = crate::host::command(gdb, ["--batch", "-ex", "python import gdb; print(gdb.VERSION)"], None, &[]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
         text.trim().split('.').next()?.parse().ok()
-    })
+    })();
+    if let Ok(mut c) = cache.lock() {
+        c.insert(gdb.to_string(), version);
+    }
+    version
+}
+
+/// A gdb that speaks DAP and knows the board's processor: the one asked for, gdb-multiarch, the
+/// ARM toolchain's, or the system's (Fedora's knows them all).
+fn embedded_gdb(asked: Option<&str>) -> Result<String, String> {
+    let candidates: Vec<&str> = match asked {
+        Some(a) => vec![a],
+        None => vec!["gdb-multiarch", "arm-none-eabi-gdb", "gdb"],
+    };
+    candidates
+        .into_iter()
+        .find(|c| crate::lsp::find_in_path(c) && gdb_major_of(c).is_some_and(|m| m >= 14))
+        .map(str::to_string)
+        .ok_or_else(|| match asked {
+            Some(a) => format!("{a}: gdb 14 or newer, built with Python, was not found"),
+            None => "gdb 14 or newer, built with Python, was not found".into(),
+        })
 }
 
 /// GDB speaks DAP from version 14 on, and only when built with Python.
@@ -218,9 +254,22 @@ pub fn resolve_adapter(kind: &str) -> Result<Adapter, String> {
             .map(|p| adapter(p, &["-m", "debugpy.adapter"]))
             .ok_or_else(|| "debugpy was not found: pip install debugpy".to_string()),
         "go" if crate::lsp::find_in_path("dlv") => Ok(adapter("dlv", &["dap"])),
+        // Without --port it talks over its standard input and output.
+        "probe-rs" if crate::lsp::find_in_path("probe-rs") => Ok(adapter("probe-rs", &["dap-server", "--vscode"])),
+        "probe-rs" => Err(format!("probe-rs was not found: {}", crate::embedded::tool_hint("probe-rs").command.unwrap_or_default())),
+        "embedded" => embedded_gdb(None).map(|g| Adapter { kind: "gdb".into(), command: g, args: vec!["-q".into(), "-i=dap".into()] }),
         "go" => Err("dlv was not found: go install github.com/go-delve/delve/cmd/dlv@latest".into()),
         other => Err(format!("unknown debugger type: {other}")),
     }
+}
+
+/// The adapter for a configuration: like `resolve_adapter`, but a board's may name its gdb.
+fn adapter_for(c: &LaunchConfig) -> Result<Adapter, String> {
+    if normalize_kind(&c.kind) == "embedded" {
+        let asked = c.extra.get("gdbPath").or_else(|| c.extra.get("gdb")).and_then(Value::as_str);
+        return embedded_gdb(asked).map(|g| Adapter { kind: "gdb".into(), command: g, args: vec!["-q".into(), "-i=dap".into()] });
+    }
+    resolve_adapter(&c.kind)
 }
 
 fn native_kind() -> Result<&'static str, String> {
@@ -254,6 +303,18 @@ pub enum ProgramFrom {
     Known,
     Cargo { near: Option<PathBuf> },
     NewestExecutable,
+    /// The firmware a microcontroller project built.
+    Firmware(Box<crate::embedded::Project>),
+}
+
+/// `${workspaceFolder}` and friends, in every string of a value.
+fn substitute_value(v: &mut Value, root: &Path, file: Option<&Path>) {
+    match v {
+        Value::String(s) => *s = substitute(s, root, file),
+        Value::Array(a) => a.iter_mut().for_each(|x| substitute_value(x, root, file)),
+        Value::Object(o) => o.values_mut().for_each(|x| substitute_value(x, root, file)),
+        _ => {}
+    }
 }
 
 /// What pressing F5 means here.
@@ -269,6 +330,17 @@ fn resolved(config: &LaunchConfig, root: &Path, file: Option<&Path>) -> Result<P
     let mut c = config.clone();
     if c.kind.is_empty() {
         return Err(format!("{}: \"type\" is missing", c.name));
+    }
+    c.kind = normalize_kind(&c.kind).to_string();
+    if matches!(c.kind.as_str(), "embedded" | "probe-rs") {
+        for v in c.extra.values_mut() {
+            substitute_value(v, root, file);
+        }
+        // Cortex-Debug calls it `executable`; probe-rs has it in its first core.
+        if c.program.is_empty() {
+            let from = c.extra.get("executable").or_else(|| c.extra.get("coreConfigs").and_then(|cc| cc.get(0)).and_then(|cc| cc.get("programBinary")));
+            c.program = from.and_then(Value::as_str).unwrap_or("").to_string();
+        }
     }
     if c.program.is_empty() {
         return Err(format!("{}: \"program\" is missing", c.name));
@@ -290,13 +362,49 @@ fn resolved(config: &LaunchConfig, root: &Path, file: Option<&Path>) -> Result<P
 
 /// The project's configuration if it has one and may use it, otherwise what its files and
 /// language suggest.
-pub fn plan(root: &Path, file: Option<&Path>, language: &str, selected: Option<&str>, use_configs: bool) -> Result<Plan, String> {
+/// A firmware project (`embedded`) is debugged on its board, through a probe.
+pub fn plan(root: &Path, file: Option<&Path>, language: &str, selected: Option<&str>, use_configs: bool, embedded: Option<&crate::embedded::Project>, pt: bool) -> Result<Plan, String> {
     let configs = if use_configs { load_configs(root)? } else { Vec::new() };
     if !configs.is_empty() {
         let c = selected.and_then(|n| configs.iter().find(|c| c.name == n)).unwrap_or(&configs[0]);
         return resolved(c, root, file);
     }
+    if let Some(p) = embedded
+        && !matches!(language, "Python" | "Go")
+    {
+        return embedded_plan(root, p, pt);
+    }
     auto_plan(root, file, language)
+}
+
+/// Build, then flash and debug the board: through probe-rs, which does both, or a GDB server.
+fn embedded_plan(root: &Path, p: &crate::embedded::Project, pt: bool) -> Result<Plan, String> {
+    use crate::embedded::Need;
+    let find = |t: &str| crate::host::find(t);
+    let need = |n: Need| match n {
+        Need::Tool { tool, hint } => match hint.command {
+            Some(c) => format!("{tool} was not found: {c}"),
+            None => format!("{tool} was not found"),
+        },
+        Need::Setting(s) => s,
+    };
+    let setup = p.debug_setup(&find, pt).map_err(need)?;
+    let build = p.build(&find, pt).map_err(need)?;
+    let mut c = LaunchConfig { name: p.name(), cwd: root.to_string_lossy().into_owned(), build: Some(build), ..LaunchConfig::default() };
+    if setup.server == "probe-rs" {
+        c.kind = "probe-rs".into();
+        c.extra.insert("chip".into(), json!(setup.chip));
+    } else {
+        adapter_for(&LaunchConfig { kind: "embedded".into(), ..LaunchConfig::default() })?;
+        c.kind = "embedded".into();
+        c.extra.insert("servertype".into(), json!(setup.server));
+        c.extra.insert("configFiles".into(), json!(setup.openocd));
+        if let Some(chip) = setup.chip {
+            c.extra.insert("device".into(), json!(chip));
+        }
+        c.extra.insert("runToEntryPoint".into(), json!("main"));
+    }
+    Ok(Plan { root: root.to_path_buf(), config: c, program_from: ProgramFrom::Firmware(Box::new(p.clone())) })
 }
 
 fn auto_plan(root: &Path, file: Option<&Path>, language: &str) -> Result<Plan, String> {
@@ -423,11 +531,18 @@ pub fn finish_plan(mut plan: Plan) -> Result<Plan, String> {
             plan.config.name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
             plan.config.program = p.to_string_lossy().into_owned();
         }
+        ProgramFrom::Firmware(project) => {
+            let p = project.firmware().ok_or("no firmware (.elf) was found after the build: add .tinta/launch.json")?;
+            plan.config.program = p.to_string_lossy().into_owned();
+        }
     }
     Ok(plan)
 }
 
 fn launch_arguments(c: &LaunchConfig) -> Value {
+    if c.kind == "probe-rs" {
+        return probe_rs_arguments(c);
+    }
     let mut a = Map::new();
     a.insert("name".into(), json!(c.name));
     a.insert("type".into(), json!(c.kind));
@@ -456,12 +571,212 @@ fn launch_arguments(c: &LaunchConfig) -> Value {
     Value::Object(a)
 }
 
+/// probe-rs flashes the firmware and runs it, with its log (RTT) coming back as output.
+fn probe_rs_arguments(c: &LaunchConfig) -> Value {
+    let mut a = json!({
+        "name": c.name,
+        "type": "probe-rs-debug",
+        "request": "launch",
+        "cwd": c.cwd,
+        "connectUnderReset": false,
+        "consoleLogLevel": "Console",
+        "flashingConfig": { "flashingEnabled": true, "haltAfterReset": c.stop_on_entry },
+        "coreConfigs": [{ "coreIndex": 0, "programBinary": c.program, "rttEnabled": true }],
+    });
+    for (k, v) in &c.extra {
+        a[k] = v.clone();
+    }
+    a
+}
+
+// Debugging a board through a GDB server ----------------------------------------------------------
+
+/// A program that speaks GDB's remote protocol for the probe: OpenOCD, st-util, J-Link, pyOCD,
+/// or one of the user's (QEMU, `west debugserver`).
+#[derive(Debug, Clone)]
+struct ServerLaunch {
+    argv: Vec<String>,
+    cwd: PathBuf,
+    /// The port to wait for before gdb connects.
+    port: Option<u16>,
+}
+
+/// What gdb does once it's connected: reset, flash, run to main.
+#[derive(Debug, Clone, Default)]
+struct RemoteSetup {
+    commands: VecDeque<String>,
+    /// The first stop (on connecting) has been seen, and the commands started.
+    started: bool,
+    /// Stay at the reset, instead of running.
+    stop_on_entry: bool,
+}
+
+/// A port nothing is using right now.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map(|a| a.port()).unwrap_or(3333)
+}
+
+/// Whether something on this computer listens on the port. Read from the kernel, not by
+/// connecting: some servers (st-util, J-Link) quit when their first client leaves.
+fn listening(port: u16) -> bool {
+    let hex = format!(":{port:04X}");
+    ["/proc/net/tcp", "/proc/net/tcp6"].iter().any(|f| {
+        std::fs::read_to_string(f).is_ok_and(|s| {
+            s.lines().skip(1).any(|l| {
+                let mut w = l.split_whitespace();
+                let local = w.nth(1).unwrap_or("");
+                let state = w.nth(1).unwrap_or("");
+                local.ends_with(&hex) && state == "0A"
+            })
+        })
+    })
+}
+
+fn extra_str(c: &LaunchConfig, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|k| c.extra.get(*k).and_then(Value::as_str)).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+fn extra_list(c: &LaunchConfig, key: &str) -> Vec<String> {
+    match c.extra.get(key) {
+        Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// The GDB server, gdb's `attach` arguments, and what to do once attached, for a configuration
+/// of type `embedded`. The keys are Cortex-Debug's, so its launch.json files work.
+fn remote_session(c: &LaunchConfig, gdb: &str) -> Result<(Option<ServerLaunch>, Value, RemoteSetup), String> {
+    let server = extra_str(c, &["servertype", "server"]).unwrap_or_else(|| "external".into()).to_ascii_lowercase();
+    let chip = extra_str(c, &["device", "chip"]);
+    let need_chip = || chip.clone().ok_or_else(|| format!("{}: \"device\" is missing: the chip, like STM32F103C8", c.name));
+    let port = free_port();
+    let p = port.to_string();
+    let local = format!("localhost:{port}");
+    let words = |w: &[&str]| w.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+    let (mut argv, target, wait): (Option<Vec<String>>, String, Option<u16>) = match server.as_str() {
+        "openocd" => {
+            let files = extra_list(c, "configFiles");
+            if files.is_empty() {
+                return Err(format!("{}: \"configFiles\" is missing: OpenOCD's files, like interface/stlink.cfg, target/stm32f1x.cfg", c.name));
+            }
+            let mut a = words(&["openocd", "-c", &format!("gdb_port {p}"), "-c", "tcl_port disabled", "-c", "telnet_port disabled"]);
+            for f in files {
+                a.push("-f".into());
+                a.push(f);
+            }
+            (Some(a), local, Some(port))
+        }
+        "stlink" | "stutil" | "st-util" => (Some(words(&["st-util", "-p", &p, "--multi"])), local, Some(port)),
+        "jlink" => {
+            let iface = extra_str(c, &["interface"]).unwrap_or_else(|| "SWD".into()).to_ascii_uppercase();
+            (Some(words(&["JLinkGDBServerCLExe", "-if", &iface, "-device", &need_chip()?, "-speed", "4000", "-port", &p])), local, Some(port))
+        }
+        "pyocd" => (Some(words(&["pyocd", "gdbserver", "-t", &need_chip()?.to_ascii_lowercase(), "-p", &p, "--persist"])), local, Some(port)),
+        "external" | "qemu" => {
+            let target = extra_str(c, &["gdbTarget"]).ok_or_else(|| format!("{}: \"gdbTarget\" is missing: where the GDB server listens, like localhost:3333", c.name))?;
+            let command = extra_str(c, &["serverCommand"]);
+            // Waiting only makes sense for a server started here, on this computer.
+            let wait = command.as_ref().and_then(|_| {
+                let (host, port) = target.rsplit_once(':')?;
+                matches!(host, "" | "localhost" | "127.0.0.1").then(|| port.parse().ok()).flatten()
+            });
+            (command.map(|cmd| words(&["sh", "-c", &cmd])), target, wait)
+        }
+        other => return Err(format!("{}: unknown GDB server \"{other}\": openocd, stlink, jlink, pyocd or external", c.name)),
+    };
+    if let (Some(a), Some(path)) = (argv.as_mut(), extra_str(c, &["serverpath", "serverPath"])) {
+        a[0] = path;
+    }
+    if let Some(a) = &argv
+        && !crate::lsp::find_in_path(&a[0])
+    {
+        let hint = crate::embedded::tool_hint(&a[0]).command.map(|h| format!(": {h}")).unwrap_or_default();
+        return Err(format!("{} was not found{hint}", a[0]));
+    }
+    let load = c.extra.get("load").and_then(Value::as_bool).unwrap_or(true);
+    let attach_only = c.extra.get("request").and_then(Value::as_str) == Some("attach");
+    let mut commands: VecDeque<String> = VecDeque::new();
+    // Before 15, gdb's attach takes no program: it's loaded here instead.
+    if gdb_major_of(gdb).is_some_and(|m| m < 15) {
+        commands.push_back(format!("file {}", escape_for_file_command(&c.program)));
+    }
+    commands.extend(extra_list(c, "preLaunchCommands"));
+    let over = extra_list(c, "overrideLaunchCommands");
+    if !over.is_empty() {
+        commands.extend(over);
+    } else if !attach_only {
+        let flush = "maintenance flush register-cache".to_string();
+        let ld = load.then(|| "load".to_string());
+        let steps: Vec<Option<String>> = match server.as_str() {
+            "openocd" | "pyocd" => vec![Some("monitor reset halt".into()), ld, Some("monitor reset halt".into()), Some(flush)],
+            "jlink" => vec![Some("monitor halt".into()), Some("monitor reset".into()), ld, Some("monitor reset".into()), Some(flush)],
+            "stlink" | "stutil" | "st-util" => vec![ld, Some("monitor reset".into()), Some(flush)],
+            _ => vec![ld],
+        };
+        commands.extend(steps.into_iter().flatten());
+    }
+    commands.extend(extra_list(c, "postLaunchCommands"));
+    let stop_on_entry = c.stop_on_entry || attach_only;
+    let run_to = match c.extra.get("runToEntryPoint").or_else(|| c.extra.get("runToMain")) {
+        Some(Value::String(f)) if !f.is_empty() => Some(f.clone()),
+        Some(Value::Bool(true)) => Some("main".into()),
+        _ => None,
+    };
+    if let Some(f) = run_to.filter(|_| !stop_on_entry) {
+        commands.push_back(format!("tbreak {f}"));
+    }
+    let attach = json!({ "program": c.program, "target": target });
+    let server = argv.map(|argv| ServerLaunch { argv, cwd: PathBuf::from(&c.cwd), port: wait });
+    Ok((server, attach, RemoteSetup { commands, started: false, stop_on_entry }))
+}
+
+/// Starts the GDB server, passes on what it says, and waits until it listens. An error if it
+/// ends first, or doesn't get there in time.
+fn start_server(s: &ServerLaunch, sink: &Sink, slot: &Arc<Mutex<Option<Child>>>) -> Result<(), String> {
+    let name = s.argv[0].clone();
+    let mut child = crate::host::command(&s.argv[0], &s.argv[1..], Some(&s.cwd).filter(|d| d.is_dir()).map(PathBuf::as_path), &[])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{name}: {e}"))?;
+    for out in [child.stdout.take().map(|o| Box::new(o) as Box<dyn Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn Read + Send>)].into_iter().flatten() {
+        let sink = sink.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                sink(Incoming::Server(line));
+            }
+        });
+    }
+    if let Ok(mut s) = slot.lock() {
+        *s = Some(child);
+    }
+    let Some(port) = s.port else { return Ok(()) };
+    let end = Instant::now() + Duration::from_secs(20);
+    loop {
+        if listening(port) {
+            return Ok(());
+        }
+        let ended = slot.lock().ok().and_then(|mut c| c.as_mut().and_then(|c| c.try_wait().ok().flatten()));
+        if let Some(status) = ended {
+            return Err(format!("{name} ended before the debugger could connect ({status})"));
+        }
+        if Instant::now() > end {
+            return Err(format!("{name} isn't listening on port {port}"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 // The client ---------------------------------------------------------------------------------
 
 struct Client {
     writer: Sender<Vec<u8>>,
     next_seq: AtomicI64,
-    child: Arc<Mutex<Child>>,
+    child: Arc<Mutex<Option<Child>>>,
+    /// The GDB server started for the session, if any.
+    server: Arc<Mutex<Option<Child>>>,
 }
 
 fn read_message(r: &mut impl BufRead) -> Option<Value> {
@@ -485,56 +800,80 @@ fn read_message(r: &mut impl BufRead) -> Option<Value> {
     serde_json::from_slice(&buf).ok()
 }
 
-impl Client {
-    fn start(adapter: &Adapter, cwd: &Path, sink: Sink, tty: Option<&ProgramTty>) -> std::io::Result<Self> {
-        let mut command = match tty {
-            // From a Flatpak, gdb gets the program's terminal as its fd 3.
-            Some(t) if crate::host::sandboxed() && adapter.kind == "gdb" => {
-                use std::os::fd::AsRawFd;
-                crate::host::command_with_fd(&adapter.command, &adapter.args, Some(cwd), &[], t.slave.as_raw_fd())
+fn spawn_adapter(adapter: &Adapter, cwd: &Path, tty: Option<&ProgramTty>) -> std::io::Result<Child> {
+    let mut command = match tty {
+        // From a Flatpak, gdb gets the program's terminal as its fd 3.
+        Some(t) if crate::host::sandboxed() && adapter.kind == "gdb" => {
+            use std::os::fd::AsRawFd;
+            crate::host::command_with_fd(&adapter.command, &adapter.args, Some(cwd), &[], t.slave.as_raw_fd())
+        }
+        _ => crate::host::command(&adapter.command, &adapter.args, Some(cwd), &[]),
+    };
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+}
+
+/// The adapter's pipes to the sink, and what's queued for it to the adapter.
+fn wire(mut child: Child, rx: Receiver<Vec<u8>>, sink: Sink, slot: Arc<Mutex<Option<Child>>>) {
+    let stdin = child.stdin.take().expect("piped");
+    let stdout = child.stdout.take().expect("piped");
+    let stderr = child.stderr.take().expect("piped");
+    if let Ok(mut s) = slot.lock() {
+        *s = Some(child);
+    }
+    std::thread::spawn(move || {
+        let mut stdin = stdin;
+        while let Ok(buf) = rx.recv() {
+            if stdin.write_all(&buf).and_then(|()| stdin.flush()).is_err() {
+                break;
             }
-            _ => crate::host::command(&adapter.command, &adapter.args, Some(cwd), &[]),
-        };
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let stdin = child.stdin.take().expect("piped");
-        let stdout = child.stdout.take().expect("piped");
-        let stderr = child.stderr.take().expect("piped");
-        let (writer, rx) = channel::<Vec<u8>>();
+        }
+    });
+    {
+        let sink = sink.clone();
         std::thread::spawn(move || {
-            let mut stdin = stdin;
-            while let Ok(buf) = rx.recv() {
-                if stdin.write_all(&buf).and_then(|()| stdin.flush()).is_err() {
-                    break;
-                }
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                sink(Incoming::Stderr(line));
             }
         });
-        {
-            let sink = sink.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                    sink(Incoming::Stderr(line));
-                }
-            });
+    }
+    std::thread::spawn(move || {
+        let mut r = BufReader::new(stdout);
+        while let Some(msg) = read_message(&mut r) {
+            sink(Incoming::Message(msg));
         }
-        let child = Arc::new(Mutex::new(child));
+        if let Ok(mut c) = slot.lock()
+            && let Some(c) = c.as_mut()
         {
-            let child = child.clone();
-            std::thread::spawn(move || {
-                let mut r = BufReader::new(stdout);
-                while let Some(msg) = read_message(&mut r) {
-                    sink(Incoming::Message(msg));
-                }
-                if let Ok(mut c) = child.lock() {
-                    let _ = c.wait();
-                }
-                sink(Incoming::Exited);
-            });
+            let _ = c.wait();
         }
-        Ok(Self { writer, next_seq: AtomicI64::new(1), child })
+        sink(Incoming::Exited);
+    });
+}
+
+impl Client {
+    /// Starts the adapter. With a GDB server, the server first, and the adapter once the server
+    /// listens, all on a thread of its own; what's sent meanwhile waits for the adapter.
+    fn start(adapter: &Adapter, cwd: &Path, sink: Sink, tty: Option<&ProgramTty>, server: Option<ServerLaunch>) -> std::io::Result<Self> {
+        let (writer, rx) = channel::<Vec<u8>>();
+        let child = Arc::new(Mutex::new(None));
+        let server_slot = Arc::new(Mutex::new(None));
+        match server {
+            None => wire(spawn_adapter(adapter, cwd, tty)?, rx, sink, child.clone()),
+            Some(s) => {
+                let (adapter, cwd, child, server_slot) = (adapter.clone(), cwd.to_path_buf(), child.clone(), server_slot.clone());
+                std::thread::spawn(move || {
+                    if let Err(e) = start_server(&s, &sink, &server_slot) {
+                        sink(Incoming::ServerFailed(e));
+                        return;
+                    }
+                    match spawn_adapter(&adapter, &cwd, None) {
+                        Ok(c) => wire(c, rx, sink, child),
+                        Err(e) => sink(Incoming::ServerFailed(format!("{}: {e}", adapter.command))),
+                    }
+                });
+            }
+        }
+        Ok(Self { writer, next_seq: AtomicI64::new(1), child, server: server_slot })
     }
 
     fn send(&self, v: &Value) {
@@ -569,14 +908,22 @@ impl Client {
 
 impl Drop for Client {
     fn drop(&mut self) {
-        // It got a disconnect, and a moment to act on it. Then nothing is left running.
-        let pid = self.child.lock().map(|c| c.id()).ok();
-        if let Some(pid) = pid {
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(600));
+        // It got a disconnect, and a moment to act on it. Then nothing is left running: not the
+        // adapter, and not the GDB server it was talking to.
+        let pid = self.child.lock().ok().and_then(|c| c.as_ref().map(Child::id));
+        let server = self.server.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            if let Some(pid) = pid {
                 let _ = Command::new("kill").arg(pid.to_string()).stderr(Stdio::null()).status();
-            });
-        }
+            }
+            if let Ok(mut s) = server.lock()
+                && let Some(c) = s.as_mut()
+            {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+        });
     }
 }
 
@@ -719,6 +1066,8 @@ enum Pending {
     Evaluate(EvalFor),
     /// A new value for a variable or a watched expression.
     SetValue,
+    /// One of the gdb commands that get a board ready.
+    Setup(String),
     Quiet,
 }
 
@@ -769,6 +1118,10 @@ pub struct Debugger {
     /// "Run to cursor" put a breakpoint in this file for a while: the file's real ones go back
     /// at the next stop.
     run_to: Option<PathBuf>,
+    /// `launch`, or `attach` for a board behind a GDB server.
+    request: &'static str,
+    /// A board: what gdb does once connected.
+    remote: Option<RemoteSetup>,
 }
 
 const MAX_ROWS: usize = 2000;
@@ -782,6 +1135,10 @@ fn check_program(c: &LaunchConfig) -> Result<(), String> {
     let p = Path::new(&c.program);
     if !p.exists() {
         return Err(format!("program not found: {}", c.program));
+    }
+    // Firmware isn't run by this computer: no need for it to be executable.
+    if matches!(c.kind.as_str(), "embedded" | "probe-rs") {
+        return if crate::embedded::is_elf(p) { Ok(()) } else { Err(format!("not an ELF file: {}", c.program)) };
     }
     if matches!(c.kind.as_str(), "gdb" | "lldb") && !is_elf_executable(p) {
         return Err(format!("not an executable program: {}", c.program));
@@ -847,13 +1204,20 @@ fn breakpoint_args(path: &Path, list: &[Breakpoint], extra: Option<usize>) -> (V
 
 impl Debugger {
     pub fn start(plan: &Plan, watches: &[String], sink: Sink, tty: Option<&ProgramTty>) -> Result<Self, String> {
-        let adapter = resolve_adapter(&plan.config.kind)?;
+        let adapter = adapter_for(&plan.config)?;
         check_program(&plan.config)?;
         let cwd = Path::new(&plan.config.cwd);
-        let tty = tty.filter(|_| matches!(adapter.kind.as_str(), "gdb" | "python"));
-        let client = Client::start(&adapter, if cwd.is_dir() { cwd } else { &plan.root }, sink, tty).map_err(|e| format!("{}: {e}", adapter.command))?;
-        let launch_last = adapter.kind == "gdb" && gdb_runs_on_launch();
-        let mut launch = launch_arguments(&plan.config);
+        let embedded = plan.config.kind == "embedded";
+        let (server, attach, remote) = if embedded {
+            let (server, attach, setup) = remote_session(&plan.config, &adapter.command)?;
+            (server, Some(attach), Some(setup))
+        } else {
+            (None, None, None)
+        };
+        let tty = tty.filter(|_| !embedded && matches!(adapter.kind.as_str(), "gdb" | "python"));
+        let client = Client::start(&adapter, if cwd.is_dir() { cwd } else { &plan.root }, sink, tty, server).map_err(|e| format!("{}: {e}", adapter.command))?;
+        let launch_last = !embedded && adapter.kind == "gdb" && gdb_runs_on_launch();
+        let mut launch = attach.unwrap_or_else(|| launch_arguments(&plan.config));
         if launch_last {
             launch["program"] = json!(escape_for_file_command(&plan.config.program));
         }
@@ -886,6 +1250,8 @@ impl Debugger {
             // the program it starts inherits it, and opens it again by this name.
             tty: tty.map(|t| if crate::host::sandboxed() && adapter.kind == "gdb" { PathBuf::from("/proc/self/fd/3") } else { t.path.clone() }),
             run_to: None,
+            request: if embedded { "attach" } else { "launch" },
+            remote,
         };
         let mut args = json!({
             "clientID": "tinta",
@@ -1032,14 +1398,19 @@ impl Debugger {
 
     /// Right now, for when the editor itself is closing.
     pub fn kill(&mut self) {
-        if let Ok(mut c) = self.client.child.lock() {
-            let _ = c.kill();
+        for slot in [&self.client.child, &self.client.server] {
+            if let Ok(mut c) = slot.lock()
+                && let Some(c) = c.as_mut()
+            {
+                let _ = c.kill();
+            }
         }
     }
 
-    /// Ends the session and the program with it.
+    /// Ends the session and the program with it. A board is let go instead, and goes on running.
     pub fn stop(&mut self) {
-        self.send(Pending::Quiet, "disconnect", json!({ "restart": false, "terminateDebuggee": true }));
+        let terminate = self.remote.is_none() && self.kind != "probe-rs";
+        self.send(Pending::Quiet, "disconnect", json!({ "restart": false, "terminateDebuggee": terminate }));
         self.state = RunState::Ended;
     }
 
@@ -1170,6 +1541,11 @@ impl Debugger {
     pub fn handle(&mut self, incoming: Incoming, bps: &mut Breakpoints) -> Vec<Notice> {
         match incoming {
             Incoming::Stderr(text) => vec![Notice::Output { category: "stderr".into(), text: format!("{text}\n") }],
+            Incoming::Server(text) => vec![Notice::Output { category: "console".into(), text: format!("{text}\n") }],
+            Incoming::ServerFailed(e) => {
+                self.state = RunState::Ended;
+                vec![Notice::Failed(e)]
+            }
             Incoming::Exited => {
                 let was_live = self.is_live();
                 self.state = RunState::Ended;
@@ -1251,10 +1627,35 @@ impl Debugger {
                 if self.launch_last {
                     // It may not answer until the program first stops, so the clock starts here.
                     let args = self.launch.clone();
-                    self.send(Pending::Launch, "launch", args);
+                    self.send(Pending::Launch, self.request, args);
                     self.launched_at = Some(Instant::now());
                 }
                 Vec::new()
+            }
+            // A board stops as gdb connects: before anything else, reset it and flash it.
+            "stopped" if self.remote.as_ref().is_some_and(|r| !r.started) => {
+                if let Some(r) = self.remote.as_mut() {
+                    r.started = true;
+                }
+                self.state = RunState::Stopped { reason: "attach".into(), description: None };
+                if let Some(t) = body["threadId"].as_i64() {
+                    self.thread = Some(t);
+                }
+                self.next_setup()
+            }
+            // probe-rs: the board's log, over RTT.
+            "probe-rs-rtt-channel-config" => {
+                let channel = body["channelNumber"].as_i64().unwrap_or(0);
+                self.send(Pending::Quiet, "rttWindowOpened", json!({ "channelNumber": channel, "windowIsOpen": true }));
+                Vec::new()
+            }
+            "probe-rs-rtt-data" => {
+                let text = body["data"].as_str().unwrap_or("").to_string();
+                if text.is_empty() { Vec::new() } else { vec![Notice::Output { category: "stdout".into(), text }] }
+            }
+            "probe-rs-show-message" => {
+                let category = if body["severity"].as_str() == Some("error") { "stderr" } else { "console" };
+                vec![Notice::Output { category: category.into(), text: format!("{}\n", body["message"].as_str().unwrap_or("")) }]
             }
             "stopped" => {
                 let reason = body["reason"].as_str().unwrap_or("").to_string();
@@ -1312,6 +1713,27 @@ impl Debugger {
         }
     }
 
+    /// The next of the commands that get a board ready, or, after the last, on to `main`.
+    fn next_setup(&mut self) -> Vec<Notice> {
+        let Some(r) = self.remote.as_mut() else { return Vec::new() };
+        if let Some(cmd) = r.commands.pop_front() {
+            self.send(Pending::Setup(cmd.clone()), "evaluate", json!({ "expression": cmd, "context": "repl" }));
+            return Vec::new();
+        }
+        if r.stop_on_entry {
+            // Shown where it is, as any other stop.
+            self.send(Pending::Threads, "threads", json!({}));
+            if let Some(t) = self.thread {
+                self.send(Pending::StackTrace { thread: t }, "stackTrace", json!({ "threadId": t, "startFrame": 0, "levels": 64 }));
+            }
+            return vec![Notice::Stopped];
+        }
+        let thread = self.thread.unwrap_or(1);
+        self.send(Pending::Quiet, "continue", json!({ "threadId": thread }));
+        self.state = RunState::Running;
+        vec![Notice::Continued]
+    }
+
     /// GDB reports a breakpoint set before the program is loaded as an error, and then places it.
     fn is_noise(&self, text: &str) -> bool {
         self.kind == "gdb" && (text.contains("No source file named") || (text.starts_with("Breakpoint ") && text.trim_end().ends_with("pending.")))
@@ -1352,7 +1774,7 @@ impl Debugger {
                 if !self.launch_last {
                     let args = self.launch.clone();
                     // Some adapters answer this only after configurationDone, so nothing waits on it.
-                    self.send(Pending::Launch, "launch", args);
+                    self.send(Pending::Launch, self.request, args);
                 }
                 Vec::new()
             }
@@ -1455,6 +1877,23 @@ impl Debugger {
                 Vec::new()
             }
             Pending::Evaluate(why) => self.on_evaluate(ok, &message, body, why),
+            Pending::Setup(cmd) => {
+                let mut out = Vec::new();
+                if let Some(text) = body["result"].as_str().filter(|t| !t.trim().is_empty()) {
+                    out.push(Notice::Output { category: "console".into(), text: format!("{}\n", text.trim_end()) });
+                }
+                if !ok {
+                    // Without the firmware on the board there's nothing to debug.
+                    if cmd == "load" || cmd.starts_with("file ") {
+                        self.stop();
+                        out.push(Notice::Failed(format!("{cmd}: {message}")));
+                        return out;
+                    }
+                    out.push(Notice::Output { category: "stderr".into(), text: format!("{cmd}: {message}\n") });
+                }
+                out.extend(self.next_setup());
+                out
+            }
             Pending::SetValue => {
                 if !ok {
                     return vec![Notice::Output { category: "stderr".into(), text: format!("{message}\n") }];
@@ -1694,18 +2133,18 @@ mod tests {
         )
         .unwrap();
         let file = dir.join("src/m.c");
-        let p = plan(&dir, Some(&file), "C", None, true).unwrap();
+        let p = plan(&dir, Some(&file), "C", None, true, None, false).unwrap();
         assert_eq!(p.config.kind, "gdb");
         assert_eq!(p.config.program, dir.join("bin/a").to_string_lossy());
         assert_eq!(p.config.cwd, dir.join("sub").to_string_lossy());
         assert_eq!(p.config.args, vec![file.to_string_lossy().to_string()]);
         assert_eq!(p.config.build.as_deref(), Some(format!("make -C {}", dir.display()).as_str()));
-        let p = plan(&dir, Some(&file), "C", Some("dois"), true).unwrap();
+        let p = plan(&dir, Some(&file), "C", Some("dois"), true, None, false).unwrap();
         assert_eq!(p.config.kind, "python");
         assert_eq!(p.config.program, dir.join("src/m.py").to_string_lossy());
         // Without a type there's nothing to run it with, and it says so.
         std::fs::write(dir.join(LAUNCH_PATH), r#"[{ "name": "x", "program": "a" }]"#).unwrap();
-        assert!(plan(&dir, None, "C", None, true).unwrap_err().contains("type"));
+        assert!(plan(&dir, None, "C", None, true, None, false).unwrap_err().contains("type"));
     }
 
     #[test]
@@ -1714,19 +2153,19 @@ mod tests {
         let c = dir.join("a b.c");
         std::fs::write(&c, "").unwrap();
         if native_kind().is_ok() {
-            let p = plan(&dir, Some(&c), "C", None, true).unwrap();
+            let p = plan(&dir, Some(&c), "C", None, true, None, false).unwrap();
             let build = p.config.build.clone().unwrap();
             assert!(build.starts_with("cc -g -O0") && build.contains(&format!("'{}'", c.display())), "{build}");
             assert!(p.config.program.ends_with("/a b"));
             std::fs::write(dir.join("Makefile"), "").unwrap();
-            let p = plan(&dir, Some(&c), "C", None, true).unwrap();
+            let p = plan(&dir, Some(&c), "C", None, true, None, false).unwrap();
             assert_eq!(p.config.build.as_deref(), Some("make"));
             assert_eq!(p.program_from, ProgramFrom::NewestExecutable);
             std::fs::write(dir.join("Cargo.toml"), "").unwrap();
-            let p = plan(&dir, Some(&dir.join("m.rs")), "Rust", None, true).unwrap();
+            let p = plan(&dir, Some(&dir.join("m.rs")), "Rust", None, true, None, false).unwrap();
             assert_eq!(p.config.build.as_deref(), Some("cargo build"));
         }
-        assert!(plan(&dir, None, "Markdown", None, true).is_err() || dir.join("Cargo.toml").exists());
+        assert!(plan(&dir, None, "Markdown", None, true, None, false).is_err() || dir.join("Cargo.toml").exists());
     }
 
     #[test]
@@ -2270,5 +2709,134 @@ int main(void) {
         drop(r);
         std::thread::sleep(Duration::from_millis(1500));
         assert!(running().is_empty(), "left running: {:?}", running());
+    }
+
+    /// A board, emulated: the STM32 template built with the ARM toolchain, run by QEMU as the GDB
+    /// server, flashed with `load`, stopped at main, then at a breakpoint in the loop.
+    #[test]
+    fn a_board_through_a_gdb_server() {
+        if !["qemu-system-arm", "arm-none-eabi-gcc", "make"].iter().all(|t| crate::lsp::find_in_path(t)) || embedded_gdb(None).is_err() {
+            eprintln!("skipped: needs qemu-system-arm, arm-none-eabi-gcc and a gdb with DAP");
+            return;
+        }
+        let dir = tempfile();
+        let t = crate::embedded::templates::by_id("stm32-c").unwrap();
+        crate::embedded::templates::create(t, &dir, "pisca").unwrap();
+        // QEMU's STM32VLDISCOVERY has an STM32F100, with 8 KiB of RAM.
+        let ld = crate::embedded::templates::STM32F103_LD.replace("LENGTH = 20K", "LENGTH = 8K");
+        std::fs::write(dir.join("stm32f103c8.ld"), ld).unwrap();
+        let built = Command::new("make").current_dir(&dir).output().unwrap();
+        assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+        let src = dir.join("main.c");
+        let line = std::fs::read_to_string(&src).unwrap().lines().position(|l| l.contains("blinks++")).unwrap();
+        let elf = dir.join("build/pisca.elf");
+        let port = free_port();
+        let launch = format!(
+            r#"[{{ "name": "qemu", "type": "cortex-debug", "request": "launch", "servertype": "external",
+                "executable": "${{workspaceFolder}}/build/pisca.elf", "gdbTarget": "localhost:{port}",
+                "serverCommand": "qemu-system-arm -M stm32vldiscovery -kernel ${{workspaceFolder}}/build/pisca.elf -S -gdb tcp::{port} -nographic -monitor none -serial null",
+                "runToEntryPoint": "main" }}]"#
+        );
+        let config = parse_configs(&launch).unwrap().remove(0);
+        let plan = resolved(&config, &dir, None).unwrap();
+        assert_eq!(plan.config.kind, "embedded");
+        assert_eq!(Path::new(&plan.config.program), elf);
+        let mut bps = Breakpoints::new();
+        bps.insert(src.clone(), vec![Breakpoint::at(line)]);
+        let mut r = Rig::start(&plan, bps);
+
+        // Reset, flashed, and stopped at main by the temporary breakpoint.
+        r.until("main", |r| r.stopped_with_vars() && r.d.frames.first().is_some_and(|f| f.name == "main"));
+        let out: String = r.notices.iter().filter_map(|n| if let Notice::Output { text, .. } = n { Some(text.as_str()) } else { None }).collect();
+        assert!(out.contains("Loading section .isr_vector"), "load ran: {out}");
+        assert!(r.notices.iter().any(|n| matches!(n, Notice::Show { path, .. } if *path == src)));
+
+        // On to the breakpoint in the loop, twice: the variable counts.
+        r.d.continue_();
+        r.until("loop", |r| r.stopped_with_vars() && r.line() == line);
+        assert!(r.bps[&src].iter().all(|b| b.state == BpState::Verified), "{:?}", r.bps);
+        assert_eq!(r.var("Locals/blinks").as_deref(), Some("0"));
+        r.d.continue_();
+        r.until("loop again", |r| r.stopped_with_vars() && r.var("Locals/blinks").as_deref() == Some("1"));
+
+        // The registers of a Cortex-M, and gdb's own commands, reach the board.
+        r.d.console_input("-exec info registers pc");
+        r.until("registers", |r| r.notices.iter().any(|n| matches!(n, Notice::Output { text, .. } if text.contains("pc ") && text.contains("main"))));
+
+        // Stopping lets go of the board, and the server goes with the session.
+        let server = r.d.client.server.clone();
+        r.d.stop();
+        drop(r);
+        std::thread::sleep(Duration::from_millis(1200));
+        let gone = server.lock().unwrap().as_mut().is_none_or(|c| c.try_wait().ok().flatten().is_some());
+        assert!(gone, "QEMU still running");
+    }
+
+    #[test]
+    fn a_server_that_never_listens_fails_the_session() {
+        let mut c = LaunchConfig { name: "x".into(), kind: "embedded".into(), program: "/x.elf".into(), ..LaunchConfig::default() };
+        c.extra.insert("servertype".into(), json!("openocd"));
+        assert!(remote_session(&c, "gdb").unwrap_err().contains("configFiles"));
+        c.extra.insert("servertype".into(), json!("jlink"));
+        assert!(remote_session(&c, "gdb").unwrap_err().contains("device"));
+        c.extra.insert("servertype".into(), json!("external"));
+        c.extra.insert("gdbTarget".into(), json!("localhost:1"));
+        c.extra.insert("serverCommand".into(), json!("echo bye; exit 3"));
+        c.extra.insert("load".into(), json!(false));
+        let (server, attach, setup) = remote_session(&c, "gdb").unwrap();
+        assert_eq!(attach["target"], "localhost:1");
+        assert!(setup.commands.iter().all(|c| c != "load"));
+        let (tx, rx) = channel();
+        let tx = Mutex::new(tx);
+        let sink: Sink = Arc::new(move |m| {
+            let _ = tx.lock().unwrap().send(m);
+        });
+        let slot = Arc::new(Mutex::new(None));
+        let err = start_server(&server.unwrap(), &sink, &slot).unwrap_err();
+        assert!(err.contains("ended before the debugger could connect"), "{err}");
+        let said: Vec<Incoming> = rx.try_iter().collect();
+        assert!(said.iter().any(|m| matches!(m, Incoming::Server(t) if t == "bye")), "{said:?}");
+    }
+
+    #[test]
+    fn openocd_and_friends_are_started_as_cortex_debug_would() {
+        if !crate::lsp::find_in_path("sh") {
+            return;
+        }
+        let mut c = LaunchConfig { name: "x".into(), kind: "embedded".into(), program: "/fw.elf".into(), cwd: "/".into(), ..LaunchConfig::default() };
+        c.extra.insert("servertype".into(), json!("openocd"));
+        c.extra.insert("configFiles".into(), json!(["interface/stlink.cfg", "target/stm32f1x.cfg"]));
+        c.extra.insert("serverpath".into(), json!("sh"));
+        c.extra.insert("runToEntryPoint".into(), json!("main"));
+        let (server, attach, setup) = remote_session(&c, "gdb").unwrap();
+        let s = server.unwrap();
+        assert_eq!(s.argv[0], "sh");
+        assert!(s.argv.windows(2).any(|w| w == ["-f", "target/stm32f1x.cfg"]));
+        assert_eq!(attach["target"], format!("localhost:{}", s.port.unwrap()));
+        let cmds: Vec<&str> = setup.commands.iter().map(String::as_str).collect();
+        let at = |x: &str| cmds.iter().position(|c| *c == x).unwrap_or_else(|| panic!("{x} in {cmds:?}"));
+        assert!(at("monitor reset halt") < at("load") && at("load") < at("tbreak main"));
+        // Attaching leaves the board as it is: no reset, no flashing.
+        c.extra.insert("request".into(), json!("attach"));
+        let (_, _, setup) = remote_session(&c, "gdb").unwrap();
+        assert!(setup.stop_on_entry && !setup.commands.iter().any(|c| c == "load" || c.starts_with("tbreak")));
+    }
+
+    #[test]
+    fn probe_rs_gets_its_own_launch_arguments() {
+        let c = LaunchConfig { name: "fw".into(), kind: "probe-rs".into(), program: "/t/fw".into(), cwd: "/t".into(), stop_on_entry: true, extra: [("chip".to_string(), json!("RP2040"))].into_iter().collect(), ..LaunchConfig::default() };
+        let a = launch_arguments(&c);
+        assert_eq!(a["type"], "probe-rs-debug");
+        assert_eq!(a["chip"], "RP2040");
+        assert_eq!(a["coreConfigs"][0]["programBinary"], "/t/fw");
+        assert_eq!(a["flashingConfig"]["haltAfterReset"], true);
+        // VS Code's own probe-rs configuration names the program in its first core.
+        let vscode = r#"{ "configurations": [{ "type": "probe-rs-debug", "name": "p", "chip": "STM32F411CEUx",
+            "coreConfigs": [{ "programBinary": "${workspaceFolder}/target/thumbv7em-none-eabihf/debug/app" }] }] }"#;
+        let c = parse_configs(vscode).unwrap().remove(0);
+        let plan = resolved(&c, Path::new("/w"), None).unwrap();
+        assert_eq!(plan.config.kind, "probe-rs");
+        assert_eq!(plan.config.program, "/w/target/thumbv7em-none-eabihf/debug/app");
+        assert_eq!(launch_arguments(&plan.config)["coreConfigs"][0]["programBinary"], "/w/target/thumbv7em-none-eabihf/debug/app");
     }
 }

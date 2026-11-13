@@ -120,7 +120,13 @@ impl App {
             Ok(b) => b,
             Err(t) => return t,
         };
-        let mut plan = match dap::plan(&root, file.as_deref(), &language, self.debug.selected.as_deref(), own) {
+        // A firmware project is debugged on its board.
+        let embedded = match self.embedded_project(&root, then) {
+            Ok(p) => p,
+            Err(t) => return t,
+        };
+        let pt = self.pt();
+        let mut plan = match dap::plan(&root, file.as_deref(), &language, self.debug.selected.as_deref(), own, embedded.as_ref(), pt) {
             Ok(p) => p,
             Err(e) => return self.debug_problem(e),
         };

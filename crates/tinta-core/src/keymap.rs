@@ -190,6 +190,16 @@ commands! {
     ShowDebugConsole, "view.debugConsole", "Show Debug Console", "Mostrar console de depuração", ["ctrl+shift+y"];
     DebugConfigure, "debug.configure", "Edit launch.json", "Editar launch.json", [];
     DebugSelectConfig, "debug.select", "Choose Debug Configuration", "Escolher configuração de depuração", [];
+    // Microcontrollers
+    EmbeddedVerify, "embedded.verify", "Embedded: Verify (Build)", "Embarcado: verificar (compilar)", ["ctrl+alt+r"];
+    EmbeddedFlash, "embedded.flash", "Embedded: Build and Upload to the Board", "Embarcado: compilar e gravar na placa", ["ctrl+alt+u"];
+    EmbeddedMonitor, "embedded.monitor", "Embedded: Serial Monitor", "Embarcado: monitor serial", ["ctrl+alt+s"];
+    EmbeddedPlotter, "embedded.plotter", "Embedded: Serial Plotter", "Embarcado: gráfico serial", [];
+    EmbeddedPort, "embedded.port", "Embedded: Choose Serial Port…", "Embarcado: escolher porta serial…", [];
+    EmbeddedBaud, "embedded.baud", "Embedded: Choose Baud Rate…", "Embarcado: escolher velocidade da porta…", [];
+    EmbeddedBoard, "embedded.board", "Embedded: Choose Board…", "Embarcado: escolher placa…", [];
+    EmbeddedConfigure, "embedded.configure", "Embedded: Edit embedded.json", "Embarcado: editar embedded.json", [];
+    EmbeddedNewProject, "embedded.new", "Embedded: New Project…", "Embarcado: novo projeto…", [];
     ToggleVim, "view.vim", "Toggle Vim Mode", "Alternar modo Vim", [];
     ToggleWordWrap, "view.wrap", "Toggle Word Wrap", "Alternar quebra de linha", ["alt+z"];
     ToggleMinimap, "view.minimap", "Toggle Minimap", "Alternar minimapa", [];

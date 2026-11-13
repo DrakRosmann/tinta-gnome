@@ -44,6 +44,12 @@ pub enum PAction {
     Location(PathBuf, usize, usize),
     Task(Box<tinta_core::tasks::Task>),
     DebugConfig(String),
+    /// A serial port, or None for the first one plugged in.
+    SerialPort(Option<String>),
+    SerialBaud(u32),
+    /// Arduino's FQBN, PlatformIO's environment, the Pico's board.
+    Board(String),
+    EmbeddedTemplate(&'static str),
 }
 
 #[derive(Debug, Clone)]
@@ -436,6 +442,10 @@ impl App {
                 }
             }
             PAction::Task(t) => self.run_task(*t),
+            PAction::SerialPort(p) => self.set_serial_port(p),
+            PAction::SerialBaud(b) => self.set_serial_baud(b),
+            PAction::Board(b) => self.set_board(b),
+            PAction::EmbeddedTemplate(id) => self.embedded_template_chosen(id),
             PAction::DebugConfig(name) => {
                 self.debug.selected = Some(name);
                 self.debug_start(false)

@@ -101,7 +101,7 @@ impl App {
         let items = list
             .into_iter()
             .map(|t| PItem {
-                label: t.name.clone(),
+                label: super::embedded::task_label(&t.name, crate::i18n::is_portuguese()),
                 detail: t.command.clone(),
                 hint: String::new(),
                 positions: Vec::new(),
@@ -140,6 +140,7 @@ impl App {
 
     pub fn run_task(&mut self, task: Task) -> AppTask {
         self.stop_task();
+        let uploading = task.name.ends_with(": upload");
         // A file with no folder, like untitled text being run, builds where the task says.
         let Some(root) = self.task_root().or_else(|| task.cwd.as_ref().map(PathBuf::from)) else { return AppTask::none() };
         let save = self.save_all_dirty_named();
@@ -179,6 +180,10 @@ impl App {
             let code = child.wait().ok().and_then(|s| s.code());
             bus::send(Message::Task(TaskMsg::Finished(generation, code)));
         });
+        // The serial monitor holds the port an upload may need: it lets go, and comes back.
+        if uploading {
+            self.serial_upload_started(generation, false);
+        }
         save
     }
 
@@ -271,12 +276,13 @@ impl App {
                 self.tasks.running = None;
                 self.tasks.exit = Some(if code == Some(0) { Ok(()) } else { Err(code) });
                 self.debug_build_finished(g, code == Some(0));
+                let serial = self.serial_upload_finished(g, code == Some(0));
                 let run = self.run_build_finished(g, code == Some(0));
                 // Built to run: the program says the rest.
                 if !run.is_empty() {
-                    return run;
+                    return AppTask::batch([serial, run]);
                 }
-                let name = self.tasks.last.as_ref().map(|t| t.name.clone()).unwrap_or_default();
+                let name = self.tasks.last.as_ref().map(|t| super::embedded::task_label(&t.name, crate::i18n::is_portuguese())).unwrap_or_default();
                 let errors = self.tasks.problems.iter().filter(|(_, p)| p.severity == Severity::Error).count();
                 let warnings = self.tasks.problems.len() - errors;
                 let text = if code == Some(0) && errors == 0 {
@@ -284,7 +290,7 @@ impl App {
                 } else {
                     format!("{name}: {errors} {}, {warnings} {}", tr("errors"), tr("warnings"))
                 };
-                self.toast(text)
+                AppTask::batch([serial, self.toast(text)])
             }
             TaskMsg::Jump(i) => {
                 let Some(loc) = self.tasks.lines.get(i).and_then(|l| l.location.clone()) else { return AppTask::none() };

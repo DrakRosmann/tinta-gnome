@@ -1949,3 +1949,125 @@ fn markdown_runs_as_its_preview() {
     assert!(ui.app.tabs.len() > before, "the preview opened");
     assert!(ui.term_runs.is_empty());
 }
+
+/// A pseudo-terminal stands in for the board's serial port: it reads what the monitor sends.
+fn read_board(master: &mut std::fs::File, until: &str) -> String {
+    use std::io::Read;
+    use std::os::fd::AsRawFd;
+    unsafe {
+        let fd = master.as_raw_fd();
+        libc_fcntl_nonblock(fd);
+    }
+    let mut seen = Vec::new();
+    for _ in 0..300 {
+        let mut buf = [0u8; 256];
+        if let Ok(n) = master.read(&mut buf) {
+            seen.extend_from_slice(&buf[..n]);
+        }
+        if String::from_utf8_lossy(&seen).contains(until) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    String::from_utf8_lossy(&seen).into_owned()
+}
+
+unsafe fn libc_fcntl_nonblock(fd: i32) {
+    unsafe extern "C" {
+        fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+    const F_GETFL: i32 = 3;
+    const F_SETFL: i32 = 4;
+    const O_NONBLOCK: i32 = 0o4000;
+    unsafe {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    }
+}
+
+#[test]
+fn a_firmware_project_uploads_and_its_serial_port_is_watched() {
+    use crate::app::{LineKind, PanelView, SerialMsg, SerialState};
+    use std::io::Write;
+    let board = tinta_core::dap::open_tty().unwrap();
+    let port = board.path.to_string_lossy().into_owned();
+    let mut master = std::fs::File::from(board.master.try_clone().unwrap());
+    let dir = temp_dir("firmware");
+    std::fs::create_dir_all(dir.join(".tinta")).unwrap();
+    let config = format!(r#"{{ "build": "echo compilando", "flash": "echo gravando", "port": "{port}", "baud": 57600 }}"#);
+    std::fs::write(dir.join(".tinta/embedded.json"), config).unwrap();
+    std::fs::write(dir.join("main.c"), "int main(void) { return 0; }\n").unwrap();
+    tinta_core::run::trust::trust(&dir).unwrap();
+    let mut ui = Ui::new(vec![dir.clone(), dir.join("main.c")]);
+    ui.app.settings.lsp_enabled = false;
+    assert_eq!(ui.app.embedded.current.as_ref().and_then(|p| p.port.as_deref()), Some(port.as_str()));
+
+    // Ctrl+F5: build and upload in the task panel, then the serial monitor, connected.
+    ui.cmd(Command::RunFile);
+    assert_eq!(ui.app.tasks.last.as_ref().map(|t| t.command.as_str()), Some("echo compilando && echo gravando"));
+    wait_long(&mut ui, |a| a.serial.state == SerialState::Open(port.clone()));
+    assert_eq!(ui.app.panel, Some(PanelView::Serial));
+    assert!(ui.term_runs.is_empty(), "no terminal: the monitor is the editor's own");
+
+    // What the board writes shows up, in lines, and its numbers go on the plot.
+    master.write_all(b"temperatura:21.5\r\nOla, mundo\r\nmei").unwrap();
+    wait_long(&mut ui, |a| a.serial.lines.iter().any(|l| l.text == "Ola, mundo") && a.serial.partial == "mei");
+    assert!(ui.app.serial.lines.iter().any(|l| l.kind == LineKind::Received && l.text == "temperatura:21.5"));
+    assert_eq!(ui.app.serial.plot.series[0].0, "temperatura");
+    // A line sent gets to the board, with the line ending chosen.
+    ui.msg(Message::Serial(SerialMsg::Ending(tinta_core::embedded::serial::LineEnding::CrLf)));
+    ui.msg(Message::Serial(SerialMsg::Input("LED 1".into())));
+    ui.msg(Message::Serial(SerialMsg::Send));
+    assert!(read_board(&mut master, "LED 1\r\n").contains("LED 1\r\n"));
+    assert!(ui.app.serial.lines.iter().any(|l| l.kind == LineKind::Sent && l.text == "LED 1"));
+    assert!(ui.app.serial.input.is_empty());
+
+    // Uploading lets go of the port, and takes it back after.
+    let before = ui.app.serial.lines.len();
+    ui.cmd(Command::EmbeddedFlash);
+    wait_long(&mut ui, |a| a.serial.lines.len() > before + 2 && a.serial.state == SerialState::Open(port.clone()));
+    let after: Vec<&str> = ui.app.serial.lines[before..].iter().filter(|l| l.kind == LineKind::Info).map(|l| l.text.as_str()).collect();
+    let at = |t: &str| after.iter().position(|l| *l == t).unwrap_or_else(|| panic!("{t:?} in {after:?}"));
+    assert!(at(crate::i18n::tr("Disconnected")) < at(crate::i18n::tr("Uploaded to the board")), "the port was freed for the upload: {after:?}");
+    // Verify only builds.
+    ui.cmd(Command::EmbeddedVerify);
+    assert_eq!(ui.app.tasks.last.as_ref().map(|t| t.command.as_str()), Some("echo compilando"));
+    assert!(ui.app.serial.is_on(), "building doesn't touch the port");
+
+    // Another speed: kept on this computer, and the monitor follows it.
+    ui.cmd(Command::EmbeddedBaud);
+    let i = ui.app.palette.as_ref().unwrap().items.iter().position(|i| matches!(i.action, crate::app::PAction::SerialBaud(9600))).unwrap();
+    ui.msg(Message::Palette(crate::app::PaletteMsg::Click(i)));
+    assert_eq!(ui.app.embedded.current.as_ref().map(|p| p.baud), Some(9600));
+    assert_eq!(ui.app.serial.target.1, 9600);
+    wait_long(&mut ui, |a| a.serial.state == SerialState::Open(port.clone()));
+
+    // Cleared, then disconnected.
+    ui.msg(Message::Serial(SerialMsg::Clear));
+    assert!(ui.app.serial.lines.is_empty() && ui.app.serial.plot.series.is_empty());
+    ui.msg(Message::Serial(SerialMsg::Toggle));
+    assert!(!ui.app.serial.is_on());
+    wait_long(&mut ui, |a| a.serial.state == SerialState::Off);
+}
+
+#[test]
+fn a_new_firmware_project_from_a_template() {
+    let parent = temp_dir("newfirmware");
+    let mut ui = Ui::new(vec![]);
+    ui.cmd(Command::EmbeddedNewProject);
+    let i = ui.app.palette.as_ref().unwrap().items.iter().position(|i| matches!(i.action, crate::app::PAction::EmbeddedTemplate("arduino"))).unwrap();
+    ui.msg(Message::Palette(crate::app::PaletteMsg::Click(i)));
+    assert!(matches!(ui.app.dialog, Some(crate::app::DialogState::NewEmbeddedProject("arduino"))));
+    ui.msg(Message::Dialog(crate::app::DialogMsg::Input("Semáforo".into())));
+    ui.msg(Message::Dialog(crate::app::DialogMsg::Primary));
+    // The folder dialog answers with where to put it.
+    ui.msg(Message::Embedded(crate::app::EmbeddedMsg::CreateIn { template: "arduino", name: "Semáforo".into(), parent: parent.clone() }));
+    let dir = parent.join("Sem_foro");
+    assert_eq!(ui.app.folder.as_deref(), Some(dir.canonicalize().unwrap().as_path()));
+    let (_, e) = ui.app.active().unwrap();
+    assert!(e.doc.path.as_ref().unwrap().ends_with("Sem_foro/Sem_foro.ino"));
+    assert_eq!(e.doc.language.name, "C++");
+    assert_eq!(ui.app.embedded.current.as_ref().map(|p| p.kind), Some(tinta_core::embedded::Kind::Arduino));
+    // No board yet: Ctrl+F5 asks for one instead of failing.
+    ui.cmd(Command::RunFile);
+    assert!(ui.term_runs.is_empty());
+}

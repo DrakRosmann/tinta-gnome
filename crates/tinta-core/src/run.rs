@@ -101,6 +101,10 @@ pub struct Request<'a> {
     pub out_dir: &'a Path,
     /// The text's first line, for a shebang.
     pub first_line: &'a str,
+    /// The firmware project the file is in: running means flashing the board.
+    pub embedded: Option<&'a crate::embedded::Project>,
+    /// For what the serial monitor says.
+    pub portuguese: bool,
 }
 
 /// One way to run a language: the program it needs, a build, and the run.
@@ -565,6 +569,12 @@ pub fn plan(req: &Request, find: &dyn Fn(&str) -> bool) -> Result<RunPlan, RunEr
     if let Some(e) = req.project.and_then(|p| user_entry(p, req.file, req.language)) {
         return Ok(from_user(e, req, Source::Project));
     }
+    if let Some(p) = req.embedded
+        && req.file.starts_with(&p.root)
+        && is_firmware_source(req.file, req.language)
+    {
+        return firmware_plan(p, req, find);
+    }
     let ext = ext_of(req.file);
     let title = title_of(req.file);
     let cwd = req.file.parent().unwrap_or(req.root).to_path_buf();
@@ -594,6 +604,30 @@ pub fn plan(req: &Request, find: &dyn Fn(&str) -> bool) -> Result<RunPlan, RunEr
     };
     let action = Action::Shell { build: w.build.map(|b| substitute(b, req, None)), run: substitute(w.run, req, Some(req.args)) };
     Ok(simple(action, Source::Builtin))
+}
+
+/// Code that ends up in the firmware, or the project's files: not a script that runs on the
+/// computer, like a Python tool beside the firmware.
+fn is_firmware_source(file: &Path, language: &str) -> bool {
+    let ext = ext_of(file);
+    if matches!(ext.as_str(), "html" | "htm" | "xhtml" | "md" | "markdown") || language.eq_ignore_ascii_case("Markdown") {
+        return false;
+    }
+    match runner_for(file, language) {
+        Some(r) => r.langs.iter().any(|l| matches!(*l, "C" | "C++" | "Rust" | "ARM Assembly" | "x86_64 Assembly" | "Makefile")),
+        None => true,
+    }
+}
+
+/// Build the firmware, then put it on the board and watch the serial port.
+fn firmware_plan(p: &crate::embedded::Project, req: &Request, find: &dyn Fn(&str) -> bool) -> Result<RunPlan, RunError> {
+    use crate::embedded::Need;
+    let steps = p.build(find, req.portuguese).and_then(|b| p.run_after_build(find, req.portuguese).map(|r| (b, r)));
+    match steps {
+        Ok((build, run)) => Ok(RunPlan { title: p.name(), cwd: p.root.clone(), action: Action::Shell { build: Some(build), run }, source: Source::Environment, newest_in: None }),
+        Err(Need::Tool { tool, hint }) => Err(RunError::Missing { language: req.language.to_string(), tool, hint }),
+        Err(Need::Setting(s)) => Err(RunError::Config(s)),
+    }
 }
 
 /// After a build of a project that names no program (make, cmake): the newest one it made, with
@@ -823,7 +857,7 @@ pub mod trust {
 
     /// The project's files that run commands, those that exist.
     pub fn command_files(root: &Path) -> Vec<&'static str> {
-        [super::RUN_PATH, crate::dap::LAUNCH_PATH, crate::tasks::TASKS_PATH].into_iter().filter(|f| root.join(f).exists()).collect()
+        [super::RUN_PATH, crate::dap::LAUNCH_PATH, crate::tasks::TASKS_PATH, crate::embedded::CONFIG_PATH].into_iter().filter(|f| root.join(f).exists()).collect()
     }
 }
 
@@ -832,7 +866,7 @@ mod tests {
     use super::*;
 
     fn req<'a>(file: &'a Path, language: &'a str, root: &'a Path, user: &'a UserRunners) -> Request<'a> {
-        Request { file, language, root, user, project: None, args: "", out_dir: Path::new("/tmp/out"), first_line: "" }
+        Request { file, language, root, user, project: None, args: "", out_dir: Path::new("/tmp/out"), first_line: "", embedded: None, portuguese: false }
     }
 
     fn all(_: &str) -> bool {
@@ -1078,6 +1112,32 @@ mod tests {
     fn every_runner_has_a_way() {
         for r in RUNNERS {
             assert!(!r.ways.is_empty() && !r.exts.is_empty(), "{:?}", r.exts);
+        }
+    }
+
+    #[test]
+    fn firmware_runs_on_the_board() {
+        let d = temp("firmware");
+        std::fs::write(d.join("CMakeLists.txt"), "include(pico_sdk_import.cmake)\nproject(p C)\npico_sdk_init()\nadd_executable(pisca main.c)\n").unwrap();
+        let p = crate::embedded::detect_with(&d, None, &Default::default()).unwrap();
+        let user = UserRunners::new();
+        let main = d.join("main.c");
+        let mut r = req(&main, "C", &d, &user);
+        r.embedded = Some(&p);
+        let (build, run) = shell(&plan(&r, &all).unwrap());
+        assert!(build.unwrap().contains("cmake --build build"));
+        assert!(run.starts_with("picotool load -f -x ") && run.contains("build/pisca.elf") && run.contains("tinta-monitor"), "{run}");
+        // A script beside the firmware still runs on the computer.
+        let py = d.join("tool.py");
+        let mut r = req(&py, "Python", &d, &user);
+        r.embedded = Some(&p);
+        assert!(shell(&plan(&r, &all).unwrap()).1.starts_with("python3"));
+        // What's missing is named.
+        let mut r = req(&main, "C", &d, &user);
+        r.embedded = Some(&p);
+        match plan(&r, &|_| false) {
+            Err(RunError::Missing { tool, .. }) => assert_eq!(tool, "cmake"),
+            other => panic!("{other:?}"),
         }
     }
 }

@@ -35,6 +35,12 @@ pub fn detect(root: &Path, use_project_file: bool) -> (Vec<Task>, Option<String>
             Err(e) => problem = Some(format!(".tinta/tasks.json: {e}")),
         }
     }
+    // A firmware project's own steps (build, upload, clean) come before the generic ones.
+    match crate::embedded::detect(root, use_project_file) {
+        Ok(Some(p)) => out.extend(p.tasks(&crate::host::find)),
+        Ok(None) => {}
+        Err(e) => problem = problem.or(Some(e)),
+    }
     if root.join("Cargo.toml").exists() {
         out.push(task("cargo build", "cargo build", "build"));
         out.push(task("cargo check", "cargo check", ""));
@@ -319,6 +325,19 @@ mod tests {
         }
         assert!(!names.contains(&"make VAR"));
         assert_eq!(default_build(&t).unwrap().name, "cargo build");
+    }
+
+    #[test]
+    fn firmware_projects_build_their_way_first() {
+        let d = dir("firmware");
+        std::fs::write(d.join("CMakeLists.txt"), "include(pico_sdk_import.cmake)\nproject(p C)\npico_sdk_init()\n").unwrap();
+        let (t, _) = detect(&d, true);
+        let names: Vec<_> = t.iter().map(|x| x.name.as_str()).collect();
+        assert!(names.contains(&"cmake"), "{names:?}");
+        // Without cmake installed the Pico's build can't be offered, and the generic one stays.
+        if crate::host::find("cmake") && crate::host::find("arm-none-eabi-gcc") {
+            assert_eq!(default_build(&t).unwrap().name, "Pico SDK: build");
+        }
     }
 
     #[test]

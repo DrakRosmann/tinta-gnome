@@ -121,6 +121,13 @@ impl StatusBar {
             let state = if s.is_stopped() { tr("Paused") } else { tr("Running") };
             start.push(icon_item("tinta-debug-symbolic", format!("{} · {state}", s.name), Act::Sidebar(SidebarView::Debug)));
         }
+        // A firmware project: the board, and the serial port with its speed.
+        if let Some(p) = &app.embedded.current {
+            start.push(icon_item("media-flash-symbolic", p.summary(), Act::Cmd(Command::EmbeddedBoard)));
+            let port = p.port.as_deref().map(|p| p.rsplit('/').next().unwrap_or(p).to_string()).unwrap_or_else(|| tr("auto").to_string());
+            let label = if app.narrow { port } else { format!("{port} · {}", p.baud) };
+            start.push(icon_item("drive-harddisk-usb-symbolic", label, Act::Cmd(Command::EmbeddedPort)));
+        }
         if let Some(k) = app.keymap.pending_label() {
             start.push(item(format!("{k} …"), Act::None));
         }

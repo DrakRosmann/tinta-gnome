@@ -12,6 +12,7 @@ mod menu;
 mod panel;
 mod popups;
 mod rows;
+mod serial;
 mod shell;
 mod sidebar;
 mod status;
