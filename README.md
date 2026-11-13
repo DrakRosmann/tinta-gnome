@@ -204,9 +204,104 @@ As variáveis já vêm entre aspas: `${file}`, `${fileDirname}`, `${fileBasename
 `${fileBasenameNoExtension}`, `${workspaceFolder}`, `${out}` e `${outDir}`. Os argumentos vão no
 fim, ou onde estiver `${args}`.
 
+**Sistemas embarcados**
+
+Arduino, Raspberry Pi Pico, STM32, ESP32 e outras placas, em C, C++ e Rust. O Tinta reconhece o
+projeto pelos arquivos dele, sem configuração:
+
+| Projeto | Reconhecido por | Compila, grava e mostra a saída com |
+| --- | --- | --- |
+| PlatformIO | `platformio.ini` | `pio run`, `-t upload`, `pio device monitor` |
+| Arduino | um `.ino` na pasta | `arduino-cli compile` e `upload` |
+| Rust | `.cargo/config.toml` com um alvo sem sistema (`thumbv7m-none-eabi`…) | `cargo build` e o `runner` do `cargo run` (probe-rs, elf2uf2-rs, espflash) |
+| Raspberry Pi Pico | `pico_sdk_init()` no `CMakeLists.txt` | CMake, e o `picotool` ou o disco do BOOTSEL |
+| ESP-IDF | `sdkconfig` ou o `project.cmake` do IDF | `idf.py build`, `flash` e `monitor` |
+| Zephyr | `find_package(Zephyr)` | `west build` e `west flash` |
+| STM32CubeMX | um `.ioc` | o Makefile ou o CMake que ele gerou |
+| Makefile ou CMake | `arm-none-eabi`, `riscv…-elf`, `avr-gcc` nele | `make` ou CMake |
+
+- Num projeto de firmware, a barra de cima ganha os botões do Arduino IDE: **verificar** (✓,
+  `Ctrl+Alt+R`, só compila), **gravar na placa** (›, `Ctrl+Alt+U`) e o **monitor serial** (⇄,
+  `Ctrl+Alt+S`). `Ctrl+F5` faz tudo: compila (os erros vão para o código, como em qualquer build),
+  grava e abre o monitor conectado
+- Sem o projeto dizer como gravar, vale o primeiro programa instalado que serve: probe-rs,
+  STM32CubeProgrammer, OpenOCD, st-flash, pyOCD ou J-Link; no Pico, o `picotool` ou a cópia do
+  `.uf2` para o disco que ele mostra no BOOTSEL. O chip do OpenOCD vem do nome do STM32
+  (`STM32F103C8` → `target/stm32f1x.cfg`)
+- O **monitor serial** é um painel próprio, embaixo: conectar e desconectar, a porta e a velocidade,
+  o que a placa escreve (com a hora de cada linha, se quiser) e um campo que manda uma linha com o
+  fim de linha escolhido (nenhum, LF, CR ou CR+LF). Ele espera a porta aparecer e, quando a placa
+  reinicia, espera ela voltar. Rolado para cima, ele não pula para o fim a cada linha nova
+- **Gravar libera a porta**: o monitor solta a porta durante a gravação e se conecta de novo
+  quando ela termina, sem precisar fazer nada
+- O **gráfico serial** ("Embarcado: gráfico serial", ou o botão de gráfico no monitor) desenha os
+  números de cada linha, como o Serial Plotter do Arduino: `21.5 40`, `21.5,40` ou com nome,
+  `temp:21.5,umid:40`, uma série para cada um, com o valor atual na legenda
+- A barra de status mostra a placa e a porta: um clique escolhe a placa (o ambiente do PlatformIO,
+  a placa do Arduino, com as ligadas no USB primeiro, ou o modelo do Pico) ou a porta. Uma porta
+  sem permissão diz qual comando resolve (`sudo usermod -aG dialout $USER`). As escolhas ficam
+  guardadas neste computador, fora do projeto
+- `F5` depura na placa, com breakpoints, variáveis, pilha e registradores: pelo probe-rs, que grava
+  e depura, ou por um servidor GDB (OpenOCD, st-util, J-Link, pyOCD), com o gdb que fala DAP
+  (`gdb-multiarch`, `arm-none-eabi-gdb` ou o `gdb` do sistema, se ele conhece ARM). A sessão
+  reinicia o chip, grava o firmware e para em `main`. Parar a depuração solta a placa, que
+  continua rodando
+- O clangd pergunta ao compilador cruzado onde estão os cabeçalhos dele, e o rust-analyzer não
+  checa testes num crate sem `std`, que não teria como compilá-los. Arquivos `.ino` têm as cores
+  do C++, sem o clangd, que não compila um sketch sozinho
+- "Embarcado: novo projeto…" cria um projeto que pisca o LED, pronto para compilar, gravar e
+  depurar: sketch do Arduino, PlatformIO (Uno, ESP32 e Nucleo), Pico em C (Pico SDK) e em Rust,
+  e STM32F103 "Blue Pill" em C (sem HAL, com Makefile e linker script) e em Rust
+
+O que os arquivos não dizem vai no `.tinta/embedded.json` ("Embarcado: editar embedded.json" cria
+um modelo):
+
+```jsonc
+{
+  "chip": "STM32F103C8",           // para o probe-rs, J-Link e pyOCD
+  "probe": "openocd",              // probe-rs, openocd, stlink, stm32programmer, jlink, pyocd, picotool, uf2
+  "openocd": ["interface/stlink.cfg", "target/stm32f1x.cfg"],
+  "board": "arduino:avr:uno",      // FQBN, ambiente do PlatformIO, placa do Pico ou do Zephyr
+  "port": "/dev/ttyACM0",
+  "baud": 115200,
+  "build": "make -j8",             // e "flash", "monitor" e "clean", para usar os seus
+}
+```
+
+No `.tinta/launch.json`, o tipo `embedded` depura por um servidor GDB e aceita as chaves do
+Cortex-Debug do VS Code (`"type": "cortex-debug"` também vale); `probe-rs-debug` é o do probe-rs:
+
+```jsonc
+[
+  {
+    "name": "Placa",
+    "type": "embedded",
+    "build": "make",
+    "executable": "${workspaceFolder}/build/firmware.elf",
+    "servertype": "openocd",        // openocd, stlink, jlink, pyocd ou external
+    "configFiles": ["interface/stlink.cfg", "target/stm32f1x.cfg"],
+    "device": "STM32F103C8",        // jlink e pyocd
+    "runToEntryPoint": "main"
+  },
+  {
+    "name": "QEMU",
+    "type": "embedded",
+    "servertype": "external",
+    "executable": "${workspaceFolder}/build/firmware.elf",
+    "serverCommand": "qemu-system-arm -M stm32vldiscovery -kernel build/firmware.elf -S -gdb tcp::3333 -nographic",
+    "gdbTarget": "localhost:3333",
+    "runToEntryPoint": "main"
+  }
+]
+```
+
+Também valem `"request": "attach"` (conecta sem reiniciar nem gravar), `"load": false`,
+`gdbPath`, `serverpath`, `preLaunchCommands`, `postLaunchCommands` e `overrideLaunchCommands`. No
+console, `-exec monitor reset halt` fala com o servidor.
+
 **Pastas confiáveis**
 
-Os arquivos `.tinta/run.json`, `.tinta/tasks.json` e `.tinta/launch.json` de um projeto rodam
+Os arquivos `.tinta/run.json`, `.tinta/tasks.json`, `.tinta/launch.json` e `.tinta/embedded.json` de um projeto rodam
 comandos no seu computador. Por isso, na primeira vez que um deles seria usado, o Tinta pergunta se
 você confia na pasta. Confiando, a resposta fica guardada; sem confiar, os arquivos `.tinta` dela são
 ignorados até fechar o editor, e o resto (o build detectado, o depurador sem configuração) continua
@@ -244,6 +339,12 @@ Precisa do GTK 4.18, do libadwaita 1.7 e do VTE para GTK 4 (Fedora 42, Ubuntu 25
 mais novos). O `deps.sh` instala o que faltar com `apt`, `dnf` ou `pacman`. Depois é abrir "Tinta"
 no lançador, ou rodar `tinta-gnome [arquivo ou pasta]`. Ele instala ao lado do Tinta original, com
 nome, ícone e configurações próprios.
+
+Para placas, instale as ferramentas da sua: `arm-none-eabi-gcc` e um gravador (probe-rs ou
+OpenOCD) para STM32 e Pico, o `arduino-cli` ou o PlatformIO, o ESP-IDF. Quando falta alguma, um
+aviso diz qual e copia o comando que a instala. As sondas USB precisam das regras do udev delas
+(as do [probe-rs](https://probe.rs/docs/getting-started/probe-setup/) servem para quase todas), e
+as portas seriais, do grupo `dialout` (`uucp` no Arch).
 
 Para ter inteligência de código, instale o servidor da sua linguagem: `rustup component add
 rust-analyzer`, `dnf install clang-tools-extra` e assim por diante. Ele é encontrado no `PATH`.
@@ -346,6 +447,9 @@ A lista completa de atalhos está em `Ctrl+K Ctrl+S`, e os identificadores dos c
 | `F10` / `F11` / `Shift+F11` | Próxima linha / entrar na função / sair dela |
 | `F7` / `Shift+F7` | Próxima alteração / anterior |
 | `Ctrl+Shift+Y` | Console de depuração |
+| `Ctrl+Alt+R` | Verificar (compilar o firmware) |
+| `Ctrl+Alt+U` | Compilar e gravar na placa |
+| `Ctrl+Alt+S` | Monitor serial |
 
 `F11` é tela cheia, exceto durante uma sessão de depuração. "Ordenar linhas" não tem mais atalho:
 `F9` agora é o breakpoint.

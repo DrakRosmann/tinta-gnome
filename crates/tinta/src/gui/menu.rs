@@ -207,6 +207,17 @@ pub fn main_menu(app: &App) -> gio::Menu {
             ],
         ),
     );
+    menu.append_submenu(
+        Some(tr("Embedded")),
+        &submenu(
+            km,
+            &[
+                &[C::EmbeddedVerify, C::EmbeddedFlash, C::EmbeddedMonitor, C::EmbeddedPlotter],
+                &[C::EmbeddedBoard, C::EmbeddedPort, C::EmbeddedBaud, C::EmbeddedConfigure],
+                &[C::EmbeddedNewProject],
+            ],
+        ),
+    );
     let help = section(km, &[C::ShowShortcuts, C::About]);
     menu.append_section(None, &help);
     menu

@@ -25,6 +25,7 @@ pub struct Panel {
     output: gtk::TextView,
     problems: gtk::ListBox,
     pub debug: super::debug::Console,
+    pub serial: super::serial::SerialView,
     last: RefCell<Synced>,
     syncing: Cell<bool>,
     dark: Cell<Option<bool>>,
@@ -78,6 +79,7 @@ fn view_name(v: PanelView) -> &'static str {
         PanelView::Problems => "problems",
         PanelView::Output => "output",
         PanelView::Debug => "debug",
+        PanelView::Serial => "serial",
     }
 }
 
@@ -146,6 +148,8 @@ impl Panel {
         stack.add_named(&scrolled(&output), Some("output"));
         let debug = super::debug::Console::build(shell);
         stack.add_named(&debug.root, Some("debug"));
+        let serial = super::serial::SerialView::build(shell);
+        stack.add_named(&serial.root, Some("serial"));
         root.append(&stack);
 
         let mut buttons = HashMap::new();
@@ -155,6 +159,7 @@ impl Panel {
             ("problems", "Problems", PanelView::Problems),
             ("output", "Output", PanelView::Output),
             ("debug", "Debug Console", PanelView::Debug),
+            ("serial", "Serial Monitor", PanelView::Serial),
         ] {
             let b = gtk::ToggleButton::with_label(tr(label));
             b.add_css_class("flat");
@@ -181,6 +186,7 @@ impl Panel {
             output,
             problems,
             debug,
+            serial,
             last: RefCell::new(Synced::default()),
             syncing: Cell::new(false),
             dark: Cell::new(None),
@@ -540,6 +546,7 @@ impl Panel {
         }
         drop(last);
         self.debug.sync(app);
+        self.serial.sync(app);
         let _ = &self.switcher;
         self.syncing.set(false);
     }

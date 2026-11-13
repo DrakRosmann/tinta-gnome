@@ -211,7 +211,9 @@ pub type Sink = Arc<dyn Fn(Event) + Send + Sync>;
 pub fn default_servers(lsp_id: &str) -> &'static [(&'static str, &'static [&'static str])] {
     match lsp_id {
         "rust" => &[("rust-analyzer", &[])],
-        "c" | "cpp" | "objective-c" | "objective-cpp" => &[("clangd", &[])],
+        // Cross compilers are asked for their own headers, so firmware code finds `stdint.h` and
+        // the rest of what comes with the ARM, RISC-V, ESP32 and AVR toolchains.
+        "c" | "cpp" | "objective-c" | "objective-cpp" => &[("clangd", &["--query-driver=**/arm-none-eabi-*,**/riscv*-elf-*,**/xtensa-*-elf-*,**/avr-g*"])],
         "python" => &[
             ("basedpyright-langserver", &["--stdio"]),
             ("pyright-langserver", &["--stdio"]),
@@ -435,15 +437,17 @@ impl Client {
             });
         }
         let child = Arc::new(Mutex::new(child));
+        let settings = server_settings(cmd, root);
         {
             let pending = pending.clone();
+            let settings = settings.clone();
             let writer = writer.clone();
             let name = name.clone();
             let child = child.clone();
             std::thread::spawn(move || {
                 let mut r = BufReader::new(stdout);
                 while let Some(msg) = read_message(&mut r) {
-                    handle_message(&msg, &name, &pending, &writer, &sink);
+                    handle_message(&msg, &name, &pending, &writer, &sink, &settings);
                 }
                 if let Ok(mut c) = child.lock() {
                     let _ = c.wait();
@@ -462,7 +466,7 @@ impl Client {
             capabilities: Value::Null,
             versions: Mutex::new(HashMap::new()),
         };
-        client.request_raw(Kind::Other, "initialize", initialize_params(root));
+        client.request_raw(Kind::Other, "initialize", initialize_params(root, &settings));
         Ok(client)
     }
 
@@ -648,7 +652,25 @@ impl Client {
     }
 }
 
-fn initialize_params(root: &Path) -> Value {
+/// Settings a server gets from the start, and again whenever it asks. rust-analyzer, for a crate
+/// with no standard library, mustn't check its tests and benchmarks: those need one.
+pub fn server_settings(cmd: &str, root: &Path) -> Value {
+    let name = Path::new(cmd).file_name().and_then(|n| n.to_str()).unwrap_or(cmd);
+    if name == "rust-analyzer" && crate::embedded::detect_with(root, None, &Default::default()).is_some_and(|p| p.kind == crate::embedded::Kind::Cargo) {
+        return json!({ "check": { "allTargets": false }, "cargo": { "allTargets": false } });
+    }
+    Value::Null
+}
+
+fn initialize_params(root: &Path, settings: &Value) -> Value {
+    let mut params = initialize_params_base(root);
+    if !settings.is_null() {
+        params["initializationOptions"] = settings.clone();
+    }
+    params
+}
+
+fn initialize_params_base(root: &Path) -> Value {
     json!({
         "processId": std::process::id(),
         "rootUri": path_to_uri(root),
@@ -735,6 +757,7 @@ fn handle_message(
     pending: &Mutex<HashMap<i64, Kind>>,
     writer: &Sender<Vec<u8>>,
     sink: &Sink,
+    settings: &Value,
 ) {
     let name = server.to_string();
     match (msg.get("id"), msg.get("method").and_then(Value::as_str)) {
@@ -767,8 +790,15 @@ fn handle_message(
                 respond(writer, id, json!({ "applied": true }));
             }
             "workspace/configuration" => {
-                let n = msg.pointer("/params/items").and_then(Value::as_array).map_or(0, Vec::len);
-                respond(writer, id, Value::Array(vec![Value::Null; n]));
+                let items = msg.pointer("/params/items").and_then(Value::as_array).cloned().unwrap_or_default();
+                let answers = items
+                    .iter()
+                    .map(|i| match i.get("section").and_then(Value::as_str) {
+                        Some("rust-analyzer") if !settings.is_null() => settings.clone(),
+                        _ => Value::Null,
+                    })
+                    .collect();
+                respond(writer, id, Value::Array(answers));
             }
             "workspace/workspaceFolders" => respond(writer, id, Value::Null),
             _ => respond(writer, id, Value::Null),
@@ -1219,5 +1249,20 @@ mod tests {
         drop(c);
         wait(&rx, |e| matches!(e, Event::Exited { .. }));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rust_analyzer_leaves_tests_alone_in_firmware() {
+        let d = std::env::temp_dir().join(format!("tinta-lsp-fw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".cargo")).unwrap();
+        std::fs::write(d.join("Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        assert!(server_settings("rust-analyzer", &d).is_null());
+        std::fs::write(d.join(".cargo/config.toml"), "[build]\ntarget = \"thumbv7em-none-eabihf\"\n").unwrap();
+        let s = server_settings("/usr/bin/rust-analyzer", &d);
+        assert_eq!(s["check"]["allTargets"], false);
+        assert_eq!(initialize_params(&d, &s)["initializationOptions"], s);
+        assert!(initialize_params(&d, &Value::Null).get("initializationOptions").is_none());
+        assert!(server_settings("clangd", &d).is_null());
     }
 }

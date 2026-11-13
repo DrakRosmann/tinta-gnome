@@ -103,7 +103,7 @@ impl App {
     }
 
     /// The banner about a program missing to run `language`, named `label` in what it says.
-    fn run_missing(&mut self, language: &str, label: &str, tool: &str, command: Option<String>) -> Task {
+    pub(super) fn run_missing(&mut self, language: &str, label: &str, tool: &str, command: Option<String>) -> Task {
         let mut text = if self.pt() { format!("Para executar arquivos {label}, instale o {tool}") } else { format!("To run {label} files, install {tool}") };
         if let Some(c) = &command {
             text.push_str(&format!(": {c}"));
@@ -154,6 +154,14 @@ impl App {
         } else {
             None
         };
+        // A firmware project: running means flashing the board.
+        let embedded = match target.untitled {
+            Some(_) => None,
+            None => match self.embedded_project(&root, then) {
+                Ok(p) => p,
+                Err(t) => return t,
+            },
+        };
         let args = self.runner.args.get(&target.path).cloned().unwrap_or_default();
         let out = out_dir();
         let user = self.settings.run_commands.clone();
@@ -166,6 +174,8 @@ impl App {
             args: &args,
             out_dir: &out,
             first_line: &first_line,
+            embedded: embedded.as_ref(),
+            portuguese: self.pt(),
         };
         let plan = match run::plan(&req, &find) {
             Ok(p) => p,
@@ -178,8 +188,24 @@ impl App {
                 };
                 return self.run_missing(&language, &label, &tool, hint.command);
             }
-            Err(RunError::Config(e)) => return self.toast(e),
+            // An Arduino sketch with no board yet: which one is it?
+            Err(RunError::Config(_)) if embedded.as_ref().is_some_and(|p| p.kind == tinta_core::embedded::Kind::Arduino && p.board.is_none()) => {
+                return self.embedded_pick_board();
+            }
+            Err(RunError::Config(e)) => {
+                self.output.push(e.clone());
+                return self.toast(e);
+            }
         };
+        // A board: built and uploaded in the task panel, then watched in the serial monitor.
+        if embedded.as_ref().is_some_and(|p| plan.source == run::Source::Environment && p.uses_serial_monitor()) {
+            self.runner.last = Some(target);
+            return self.embedded_upload(true);
+        }
+        // The project's own tool watches the board (espflash, idf.py monitor): it needs the port.
+        if embedded.is_some() && plan.source == run::Source::Environment {
+            self.serial_disconnect();
+        }
         if self.runner.missing.as_ref().is_some_and(|(l, _, _)| *l == language) {
             self.runner.missing = None;
         }

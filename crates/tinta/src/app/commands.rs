@@ -337,6 +337,15 @@ impl App {
             C::ShowDebugConsole => self.panel = Some(PanelView::Debug),
             C::DebugConfigure => return self.debug_configure(),
             C::DebugSelectConfig => return self.debug_pick_config(),
+            C::EmbeddedMonitor => return self.serial_show(false),
+            C::EmbeddedPlotter => return self.serial_show(true),
+            C::EmbeddedVerify => return self.embedded_verify(),
+            C::EmbeddedPort => return self.embedded_pick_port(),
+            C::EmbeddedBaud => return self.embedded_pick_baud(),
+            C::EmbeddedBoard => return self.embedded_pick_board(),
+            C::EmbeddedFlash => return self.embedded_upload(false),
+            C::EmbeddedConfigure => return self.embedded_configure(),
+            C::EmbeddedNewProject => return self.embedded_new_project(),
             C::ToggleVim => {
                 self.settings.vim_mode = !self.settings.vim_mode;
                 self.vim = tinta_core::vim::Vim::new();
@@ -902,6 +911,7 @@ impl App {
                     Some(DialogState::ConfirmDiscard(entry)) => self.git_discard(entry),
                     Some(DialogState::RunArgs(path)) => self.set_run_args(path, input),
                     Some(DialogState::TrustFolder(root, _, then)) => self.answer_trust(root, true, then),
+                    Some(DialogState::NewEmbeddedProject(template)) => self.embedded_name_given(template, input),
                     _ => Task::none(),
                 }
             }

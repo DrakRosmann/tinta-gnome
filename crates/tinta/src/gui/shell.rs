@@ -27,6 +27,7 @@ fn install_icons() {
         ("actions/tinta-step-over-symbolic.svg", include_str!("../../icons/tinta-step-over-symbolic.svg")),
         ("actions/tinta-step-in-symbolic.svg", include_str!("../../icons/tinta-step-in-symbolic.svg")),
         ("actions/tinta-step-out-symbolic.svg", include_str!("../../icons/tinta-step-out-symbolic.svg")),
+        ("actions/tinta-plot-symbolic.svg", include_str!("../../icons/tinta-plot-symbolic.svg")),
         ("apps/io.github.DrakRosmann.TintaGnome.svg", include_str!("../../../../data/icons/scalable/apps/io.github.DrakRosmann.TintaGnome.svg")),
     ];
     let root = glib::user_cache_dir().join("tinta-gnome").join("icons");

@@ -201,6 +201,7 @@ impl App {
         self.index_files();
         self.refresh_git_panel();
         self.update_watches();
+        self.refresh_embedded();
         self.mark_session_dirty();
         self.update_title()
     }
@@ -210,6 +211,7 @@ impl App {
         self.explorer = super::Explorer::default();
         self.file_index = Arc::new(Vec::new());
         self.git = super::GitPanel::default();
+        self.embedded.current = None;
         self.update_watches();
         self.update_title()
     }
@@ -447,6 +449,7 @@ impl App {
     /// Only the main instance owns the session and the backups.
     pub fn persist_on_quit(&mut self) {
         self.debug_shutdown();
+        self.serial_shutdown();
         if !self.new_session {
             self.write_backups(true);
             super::save_session(self);

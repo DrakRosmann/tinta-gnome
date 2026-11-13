@@ -64,6 +64,10 @@ pub fn icon_for(c: Command) -> Option<&'static str> {
         C::StepOver => "tinta-step-over-symbolic",
         C::StepInto => "tinta-step-in-symbolic",
         C::StepOut => "tinta-step-out-symbolic",
+        C::EmbeddedVerify => "object-select-symbolic",
+        C::EmbeddedFlash => "go-next-symbolic",
+        C::EmbeddedMonitor => "network-transmit-receive-symbolic",
+        C::EmbeddedPlotter => "tinta-plot-symbolic",
         C::OpenSettings => "emblem-system-symbolic",
         C::EditHeaderBar => "document-edit-symbolic",
         C::ShowShortcuts => "preferences-desktop-keyboard-shortcuts-symbolic",
@@ -110,7 +114,7 @@ fn commands(ids: &[String]) -> Vec<Command> {
 /// The user's buttons on the header bar, rebuilt when the settings change.
 pub struct HeaderButtons {
     header: adw::HeaderBar,
-    shown: RefCell<Option<(Vec<String>, Vec<String>)>>,
+    shown: RefCell<Option<(Vec<String>, Vec<String>, bool)>>,
     widgets: RefCell<Vec<gtk::Widget>>,
 }
 
@@ -120,7 +124,8 @@ impl HeaderButtons {
     }
 
     pub fn sync(&self, shell: &Rc<Shell>, app: &App) {
-        let wanted = (app.settings.header_start.clone(), app.settings.header_end.clone());
+        // A firmware project gets verify, upload and the serial monitor, as an Arduino IDE has them.
+        let wanted = (app.settings.header_start.clone(), app.settings.header_end.clone(), app.embedded.current.is_some());
         if self.shown.borrow().as_ref() == Some(&wanted) {
             return;
         }
@@ -132,6 +137,15 @@ impl HeaderButtons {
             let b = command_button(c, shell);
             self.header.pack_start(&b);
             widgets.push(b.upcast());
+        }
+        if wanted.2 {
+            let group = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            group.add_css_class("linked");
+            for c in [Command::EmbeddedVerify, Command::EmbeddedFlash, Command::EmbeddedMonitor] {
+                group.append(&command_button(c, shell));
+            }
+            self.header.pack_start(&group);
+            widgets.push(group.upcast());
         }
         // pack_end goes from the window's controls inwards.
         for c in commands(&wanted.1).into_iter().rev() {

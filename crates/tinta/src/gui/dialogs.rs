@@ -110,6 +110,10 @@ impl Dialogs {
                 };
                 (tr("Trust this folder?").into(), body, None, "Trust", false, Some("Don't Trust"))
             }
+            DialogState::NewEmbeddedProject(id) => {
+                let template = tinta_core::embedded::templates::by_id(id).map(|t| t.name).unwrap_or_default();
+                (format!("{}: {template}", tr("New Project")), tr("Next, choose the folder to create it in.").into(), Some("Name"), "Next", false, None)
+            }
             DialogState::About | DialogState::Shortcuts | DialogState::HeaderBar => unreachable!(),
         };
         let d = adw::AlertDialog::new(Some(&title), (!body.is_empty()).then_some(body.as_str()));

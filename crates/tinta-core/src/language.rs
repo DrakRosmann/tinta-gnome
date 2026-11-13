@@ -202,6 +202,8 @@ pub fn detect(path: &Path, first_line: &str) -> &'static Language {
         ("Cargo.lock", _) | ("uv.lock", _) | ("poetry.lock", _) => Some("TOML"),
         ("Justfile" | "justfile", _) => Some("Makefile"),
         (_, "h" | "hh" | "hpp" | "hxx") => Some("C++"),
+        // Arduino sketches are C++ with the includes left out.
+        (_, "ino" | "pde") => Some("C++"),
         (_, "tsx") => Some("TypeScriptReact"),
         (_, "ts" | "mts" | "cts") => Some("TypeScript"),
         (_, "jsx") => Some("JSX"),
@@ -251,6 +253,7 @@ mod tests {
             ("a.tsx", "TypeScriptReact"),
             ("a.c", "C"),
             ("a.h", "C++"),
+            ("blink.ino", "C++"),
             ("Makefile", "Makefile"),
             ("Dockerfile", "Dockerfile"),
             ("a.md", "Markdown"),

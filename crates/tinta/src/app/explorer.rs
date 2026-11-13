@@ -103,6 +103,7 @@ impl App {
         let mut rows = Vec::new();
         self.flatten_into(&mut rows, list_dir(&root, hidden, outputs), 0);
         self.explorer.rows = rows;
+        self.refresh_embedded();
         self.update_watches();
     }
 

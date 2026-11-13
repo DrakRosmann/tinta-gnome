@@ -17,6 +17,8 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False git gcc pkgconf-pkg-config cargo rust \
             gtk4-devel libadwaita-devel vte291-gtk4-devel clang-tools-extra gdb python3-pip procps-ng
           dnf install -y --skip-unavailable google-noto-sans-mono-fonts
+          # Placas: o toolchain ARM e um STM32 emulado, para gravar e depurar firmware de verdade.
+          dnf install -y --setopt=install_weak_deps=False make arm-none-eabi-gcc-cs arm-none-eabi-newlib qemu-system-arm-core
           # O Fedora não empacota o debugpy.
           pip install --break-system-packages debugpy
 

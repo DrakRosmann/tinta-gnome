@@ -265,7 +265,7 @@ impl Window {
             in_transit: RefCell::new(None),
         };
         w.connect(shell);
-        for (id, f) in w.sidebar.fields().into_iter().chain(w.panel.debug.fields()) {
+        for (id, f) in w.sidebar.fields().into_iter().chain(w.panel.debug.fields()).chain(w.panel.serial.fields()) {
             w.register_field(id, &f);
         }
         let (id, f) = w.vim_line.field();

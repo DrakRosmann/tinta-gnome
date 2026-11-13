@@ -5,6 +5,7 @@ mod debug;
 mod diff;
 mod docs;
 mod editing;
+mod embedded;
 mod explorer;
 mod git;
 mod keys;
@@ -14,6 +15,7 @@ mod palette;
 mod run;
 mod script;
 mod search;
+mod serial;
 mod tasks;
 mod vim;
 
@@ -25,6 +27,8 @@ pub use editing::{FIND_INPUT, MAX_SHOWN_MATCHES, REPLACE_INPUT};
 pub use explorer::ExplorerMsg;
 pub use palette::{PAction, PItem, PaletteMode, PaletteMsg, PaletteState, PALETTE_INPUT};
 pub use debug::{DEBUG_INPUT, DebugMsg, DebugPanel, WATCH_INPUT};
+pub use embedded::{EmbeddedMsg, EmbeddedPanel};
+pub use serial::{LineKind, SERIAL_INPUT, SerialMsg, SerialPanel, SerialState};
 pub use run::{RunPanel, out_dir as run_out_dir};
 pub use tasks::{TaskMsg, TaskPanel};
 pub use vim::{VIM_LINE, VimMsg};
@@ -95,6 +99,8 @@ pub enum PanelView {
     Problems,
     Output,
     Debug,
+    /// The board's serial port.
+    Serial,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -128,6 +134,8 @@ pub enum DialogState {
     RunArgs(PathBuf),
     /// May this folder's `.tinta/` file run commands? Then what was asked for, again.
     TrustFolder(PathBuf, &'static str, Command),
+    /// The name of a new firmware project, from this template.
+    NewEmbeddedProject(&'static str),
     About,
     Shortcuts,
 }
@@ -250,6 +258,8 @@ pub enum Message {
     Task(TaskMsg),
     Vim(VimMsg),
     Debug(DebugMsg),
+    Embedded(EmbeddedMsg),
+    Serial(SerialMsg),
     /// The desktop's style changed: dark or light, and its monospace font.
     StyleChanged { dark: bool, mono: Option<String> },
     TermLink(String, usize),
@@ -293,6 +303,8 @@ pub struct App {
     pub tasks: TaskPanel,
     pub debug: DebugPanel,
     pub runner: RunPanel,
+    pub embedded: EmbeddedPanel,
+    pub serial: SerialPanel,
     pub system_mono: Option<String>,
     pub vim: tinta_core::vim::Vim,
     pub vim_line: Option<(char, String)>,
@@ -393,6 +405,8 @@ impl App {
             tasks: TaskPanel::default(),
             debug: DebugPanel::default(),
             runner: RunPanel::default(),
+            embedded: EmbeddedPanel::default(),
+            serial: SerialPanel::default(),
             system_mono: flags.system_mono.clone(),
             vim: tinta_core::vim::Vim::new(),
             vim_line: None,
@@ -734,6 +748,8 @@ impl App {
             Message::Task(m) => self.on_task(m),
             Message::Vim(m) => self.on_vim(m),
             Message::Debug(m) => self.on_debug(m),
+            Message::Embedded(m) => self.on_embedded(m),
+            Message::Serial(m) => self.on_serial(m),
             Message::StyleChanged { dark, mono } => {
                 let font_changed = mono != self.system_mono;
                 self.system_mono = mono;
